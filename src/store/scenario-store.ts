@@ -1,0 +1,115 @@
+import { create } from 'zustand'
+import type { Scenario, EVCPPlacement, ChargerType, ImpactEstimate } from '@/analysis/types'
+
+const STORAGE_KEY = 'va-mcda-evcp-scenarios'
+
+interface ScenarioState {
+  scenarios: Scenario[]
+  activeScenarioId: string | null
+  currentPlacements: EVCPPlacement[]
+  currentImpact: ImpactEstimate | null
+
+  addPlacement: (h3Cell: string, chargerType: ChargerType, chargerCount: number) => void
+  removePlacement: (h3Cell: string) => void
+  updatePlacement: (h3Cell: string, chargerType: ChargerType, chargerCount: number) => void
+  clearPlacements: () => void
+  setCurrentImpact: (impact: ImpactEstimate | null) => void
+
+  saveScenario: (name: string, weights: Record<string, number>, method: string) => void
+  deleteScenario: (id: string) => void
+  loadScenario: (id: string) => Scenario | null
+  setActiveScenario: (id: string | null) => void
+
+  loadFromStorage: () => void
+  saveToStorage: () => void
+}
+
+function generateId(): string {
+  return `sc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+}
+
+export const useScenarioStore = create<ScenarioState>((set, get) => ({
+  scenarios: [],
+  activeScenarioId: null,
+  currentPlacements: [],
+  currentImpact: null,
+
+  addPlacement: (h3Cell, chargerType, chargerCount) => {
+    const existing = get().currentPlacements.find((p) => p.h3Cell === h3Cell)
+    if (existing) {
+      get().updatePlacement(h3Cell, chargerType, chargerCount)
+      return
+    }
+    set({
+      currentPlacements: [
+        ...get().currentPlacements,
+        { h3Cell, chargerType, chargerCount, timestamp: Date.now() },
+      ],
+    })
+  },
+
+  removePlacement: (h3Cell) => {
+    set({
+      currentPlacements: get().currentPlacements.filter((p) => p.h3Cell !== h3Cell),
+    })
+  },
+
+  updatePlacement: (h3Cell, chargerType, chargerCount) => {
+    set({
+      currentPlacements: get().currentPlacements.map((p) =>
+        p.h3Cell === h3Cell ? { ...p, chargerType, chargerCount, timestamp: Date.now() } : p
+      ),
+    })
+  },
+
+  clearPlacements: () => set({ currentPlacements: [], currentImpact: null }),
+
+  setCurrentImpact: (impact) => set({ currentImpact: impact }),
+
+  saveScenario: (name, weights, method) => {
+    const scenario: Scenario = {
+      id: generateId(),
+      name,
+      timestamp: Date.now(),
+      weights,
+      method: method as Scenario['method'],
+      placements: [...get().currentPlacements],
+      impactSummary: get().currentImpact ?? undefined,
+    }
+    const updated = [...get().scenarios, scenario]
+    set({ scenarios: updated })
+    get().saveToStorage()
+  },
+
+  deleteScenario: (id) => {
+    const updated = get().scenarios.filter((s) => s.id !== id)
+    set({ scenarios: updated })
+    get().saveToStorage()
+  },
+
+  loadScenario: (id) => {
+    return get().scenarios.find((s) => s.id === id) ?? null
+  },
+
+  setActiveScenario: (id) => set({ activeScenarioId: id }),
+
+  loadFromStorage: () => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (raw) {
+        const scenarios = JSON.parse(raw) as Scenario[]
+        set({ scenarios })
+      }
+    } catch {
+      console.warn('Failed to load scenarios from localStorage')
+    }
+  },
+
+  saveToStorage: () => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(get().scenarios))
+    } catch {
+      console.warn('Failed to save scenarios to localStorage')
+    }
+  },
+}))

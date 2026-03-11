@@ -1,0 +1,366 @@
+% methodology.tex
+% MCDA Methodology and Impact Estimation for EVCP Siting
+% For inclusion in the main paper
+
+\section{Analytical Framework}
+\label{sec:methodology}
+
+The platform integrates two analytical components: a multi-criteria suitability model for ranking candidate locations and a lightweight impact estimation model for evaluating the consequences of proposed charger deployments. Both operate client-side over a hexagonal spatial tessellation using H3 cells at resolution~10, with each cell covering approximately $0.015~\text{km}^2$.
+
+%--------------------------------------------------------------
+\subsection{Spatial Data Model}
+\label{sec:spatial-data}
+
+The study area (Greater London) is discretised into $n \approx 118{,}000$ H3 hexagonal cells at resolution~10. Each cell $h$ carries a vector of $m = 9$ criterion values derived from heterogeneous urban datasets:
+
+\begin{equation}
+\mathbf{x}_h = \bigl(x_{h,1},\; x_{h,2},\; \ldots,\; x_{h,m}\bigr)
+\end{equation}
+
+\noindent All criterion values are pre-normalised to $[0, 1]$ using min-max normalisation prior to ingestion, ensuring deterministic and reproducible scoring without runtime normalisation cost. Table~\ref{tab:criteria} lists the nine criteria and their data sources.
+
+\begin{table}[htbp]
+\centering
+\caption{MCDA criteria used in the suitability model.}
+\label{tab:criteria}
+\small
+\begin{tabular}{clll}
+\toprule
+\textbf{\#} & \textbf{Criterion} & \textbf{Category} & \textbf{Source} \\
+\midrule
+$C_1$ & Population density & Demand & ONS Census 2021 \\
+$C_2$ & Car ownership ($\geq 1$ vehicle) & Demand & ONS Census 2021 \\
+$C_3$ & Deprivation ($\geq 2$ dimensions) & Equity & ONS Census 2021 \\
+$C_4$ & Employment accessibility (30\,min PT) & Accessibility & Accessibility analysis \\
+$C_5$ & Supermarket accessibility (30\,min PT) & Accessibility & Accessibility analysis \\
+$C_6$ & Road transport CO\textsubscript{2} emissions & Environment & NAEI 2025 projection \\
+$C_7$ & Grid demand headroom & Infrastructure & UKPN substation data \\
+$C_8$ & Motorised traffic index & Demand & DfT traffic counts \\
+$C_9$ & Distance to nearest existing EVCP & Coverage & Open Charge Map \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%--------------------------------------------------------------
+\subsection{Multi-Criteria Suitability Model}
+\label{sec:mcda-model}
+
+The platform supports three complementary MCDA scoring methods, each offering a different perspective on the trade-off structure. In all methods, the user assigns a weight vector $\mathbf{w} = (w_1, w_2, \ldots, w_m)$ subject to the constraint $\sum_{i=1}^{m} w_i = 1$, with $w_i \geq 0$.
+
+%--- WSM ---
+\subsubsection{Weighted Sum Model (WSM)}
+
+The Weighted Sum Model computes a suitability score as a linear combination of normalised criterion values:
+
+\begin{equation}
+\label{eq:wsm}
+S_h^{\text{WSM}} = \sum_{i=1}^{m} w_i \cdot \bar{x}_{h,i}
+\end{equation}
+
+\noindent where $\bar{x}_{h,i} \in [0,1]$ is the normalised value of criterion~$i$ at cell~$h$. The WSM is simple and interpretable: each criterion contributes to the final score in direct proportion to its weight. The score range is $[0, 1]$ when all normalised values and weights are non-negative.
+
+%--- WPM ---
+\subsubsection{Weighted Product Model (WPM)}
+
+The Weighted Product Model uses multiplicative aggregation, which avoids compensation between criteria:
+
+\begin{equation}
+\label{eq:wpm}
+S_h^{\text{WPM}} = \prod_{i=1}^{m} \bigl(\bar{x}_{h,i}\bigr)^{w_i}
+\end{equation}
+
+\noindent A small floor value ($\epsilon = 0.001$) is applied to prevent zero scores from nullifying the product: $\bar{x}_{h,i}' = \max(\bar{x}_{h,i},\; \epsilon)$. The WPM penalises cells with extremely low values on any criterion more heavily than the WSM, producing rankings that are more sensitive to worst-case performance.
+
+%--- TOPSIS ---
+\subsubsection{TOPSIS}
+
+The Technique for Order Preference by Similarity to Ideal Solution (TOPSIS)~\cite{hwang1981topsis} ranks alternatives based on their geometric distance to idealised best and worst solutions.
+
+First, a weighted normalised matrix is constructed:
+
+\begin{equation}
+v_{h,i} = w_i \cdot \bar{x}_{h,i}
+\end{equation}
+
+\noindent The positive ideal solution (PIS) and negative ideal solution (NIS) are determined:
+
+\begin{equation}
+A^{+}_i = \max_{h} \; v_{h,i}, \qquad
+A^{-}_i = \min_{h} \; v_{h,i}
+\end{equation}
+
+\noindent Euclidean distances from each cell to the PIS and NIS are:
+
+\begin{equation}
+D_h^{+} = \sqrt{\sum_{i=1}^{m} (v_{h,i} - A^{+}_i)^2}, \qquad
+D_h^{-} = \sqrt{\sum_{i=1}^{m} (v_{h,i} - A^{-}_i)^2}
+\end{equation}
+
+\noindent The relative closeness to the ideal solution yields the TOPSIS score:
+
+\begin{equation}
+\label{eq:topsis}
+S_h^{\text{TOPSIS}} = \frac{D_h^{-}}{D_h^{+} + D_h^{-}}
+\end{equation}
+
+\noindent with $S_h^{\text{TOPSIS}} \in [0,1]$. A cell scoring close to 1 is nearest to the ideal best and farthest from the ideal worst.
+
+%--------------------------------------------------------------
+\subsection{Weight Elicitation via AHP}
+\label{sec:ahp}
+
+Criterion weights can be derived interactively using the Analytic Hierarchy Process (AHP)~\cite{saaty1980ahp}. Users perform pairwise comparisons of criteria importance, populating an $m \times m$ reciprocal matrix $\mathbf{A}$ where:
+
+\begin{equation}
+a_{ij} = \frac{1}{a_{ji}}, \qquad a_{ii} = 1
+\end{equation}
+
+\noindent Each entry $a_{ij}$ represents the relative importance of criterion~$i$ over criterion~$j$ on the Saaty fundamental scale ($\tfrac{1}{9}$ to $9$).
+
+\paragraph{Weight derivation.}
+Priority weights are derived using the Row Geometric Mean Method (RGMM):
+
+\begin{equation}
+\label{eq:ahp-weights}
+\hat{w}_i = \frac{\left(\prod_{j=1}^{m} a_{ij}\right)^{1/m}}{\sum_{k=1}^{m} \left(\prod_{j=1}^{m} a_{kj}\right)^{1/m}}
+\end{equation}
+
+\paragraph{Consistency checking.}
+The consistency of the pairwise comparison matrix is assessed through the principal eigenvalue $\lambda_{\max}$:
+
+\begin{equation}
+\lambda_{\max} = \frac{1}{m} \sum_{i=1}^{m} \frac{(\mathbf{A} \hat{\mathbf{w}})_i}{\hat{w}_i}
+\end{equation}
+
+\noindent The Consistency Index (CI) and Consistency Ratio (CR) are:
+
+\begin{equation}
+\text{CI} = \frac{\lambda_{\max} - m}{m - 1}, \qquad
+\text{CR} = \frac{\text{CI}}{\text{RI}(m)}
+\end{equation}
+
+\noindent where $\text{RI}(m)$ is the Random Index for a matrix of size~$m$ (Table~\ref{tab:ri}). A comparison matrix is considered acceptably consistent if $\text{CR} < 0.10$.
+
+\begin{table}[htbp]
+\centering
+\caption{Random Index (RI) values for consistency checking.}
+\label{tab:ri}
+\small
+\begin{tabular}{lcccccccc}
+\toprule
+$m$ & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 \\
+\midrule
+RI & 0.58 & 0.90 & 1.12 & 1.24 & 1.32 & 1.41 & 1.45 & 1.49 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%--------------------------------------------------------------
+\subsection{Hierarchical Spatial Aggregation}
+\label{sec:aggregation}
+
+For interactive visualisation at varying zoom levels, MCDA scores computed at the base resolution (H3 resolution~10) are aggregated to coarser parent resolutions ($r \in \{5, 6, 7, 8, 9\}$) using mean pooling:
+
+\begin{equation}
+S_{\text{parent}}^{(r)} = \frac{1}{|\mathcal{C}_{\text{parent}}|} \sum_{h \in \mathcal{C}_{\text{parent}}} S_h
+\end{equation}
+
+\noindent where $\mathcal{C}_{\text{parent}}$ is the set of resolution-10 child cells belonging to the parent cell at resolution~$r$. The display resolution is selected dynamically based on the current map zoom level, reducing the number of rendered hexagons from $\sim\!118{,}000$ (resolution~10) to $\sim\!2{,}000$ (resolution~7) at typical overview zoom levels.
+
+
+%==============================================================
+\section{Impact Estimation Model}
+\label{sec:impact}
+
+Once a user selects a candidate H3 cell and configures a charger deployment (type and count), the platform estimates the potential impacts of that intervention using a set of lightweight analytical equations. These are designed for real-time evaluation within an interactive environment, prioritising tractability and transparency over simulation fidelity.
+
+%--------------------------------------------------------------
+\subsection{Charger Specifications}
+\label{sec:charger-specs}
+
+The platform supports four charger types reflecting the current UK public charging market:
+
+\begin{table}[htbp]
+\centering
+\caption{Charger type specifications.}
+\label{tab:charger-specs}
+\small
+\begin{tabular}{llrrl}
+\toprule
+\textbf{Type} & \textbf{Label} & \textbf{Power (kW)} & \textbf{Cost (\pounds/unit)} & \textbf{Install} \\
+\midrule
+Slow & AC Slow & 3.7 & 1{,}000 & 1 month \\
+Fast & AC Fast & 22 & 5{,}000 & 2 months \\
+Rapid & DC Rapid & 50 & 40{,}000 & 4 months \\
+Ultra-rapid & DC Ultra-rapid & 150 & 100{,}000 & 6 months \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%--------------------------------------------------------------
+\subsection{Demand Estimation}
+\label{sec:demand}
+
+Local daily charging demand is estimated from the spatial attributes of the selected cell. The underlying model chains population density and car ownership data through adoption and usage rate assumptions:
+
+\begin{equation}
+\label{eq:demand}
+D_h = \rho_h \cdot A_{\text{cell}} \cdot \gamma_h \cdot \alpha_{\text{car}} \cdot \alpha_{\text{EV}} \cdot \alpha_{\text{charge}} \cdot E_{\text{session}}
+\end{equation}
+
+\noindent where:
+\begin{itemize}[nosep]
+    \item $\rho_h$ is the population density of cell~$h$ (persons/km\textsuperscript{2})
+    \item $A_{\text{cell}} = 0.015$ km\textsuperscript{2} is the approximate area of an H3 resolution-10 cell
+    \item $\gamma_h$ is the local car ownership rate (proportion of households with $\geq 1$ vehicle)
+    \item $\alpha_{\text{car}} = 0.4$ is the assumed ratio of cars to car-owning population
+    \item $\alpha_{\text{EV}} = 0.15$ is the assumed EV adoption rate
+    \item $\alpha_{\text{charge}} = 0.3$ is the assumed daily public charging probability
+    \item $E_{\text{session}} = 30$ kWh is the average energy per charging session
+\end{itemize}
+
+%--------------------------------------------------------------
+\subsection{Utilisation Factor}
+\label{sec:utilisation}
+
+The charger utilisation factor captures the balance between local demand and installed capacity:
+
+\begin{equation}
+\label{eq:utilisation}
+U = \min\!\left(1,\; \frac{D_h}{N \cdot P \cdot H}\right)
+\end{equation}
+
+\noindent where $N$ is the number of chargers, $P$ is the rated power per charger (kW), and $H = 16$~hours is the assumed daily operating window. Utilisation is capped at~1 (full capacity).
+
+%--------------------------------------------------------------
+\subsection{Annual Energy Delivered}
+\label{sec:energy}
+
+The total energy delivered over a year is:
+
+\begin{equation}
+\label{eq:energy}
+E_{\text{annual}} = N \cdot P \cdot H \cdot U \cdot 365
+\quad [\text{kWh/year}]
+\end{equation}
+
+%--------------------------------------------------------------
+\subsection{Carbon Emission Reduction}
+\label{sec:carbon}
+
+Carbon savings are estimated by comparing the emissions of displaced internal combustion engine (ICE) travel with the grid emissions from EV charging:
+
+\begin{equation}
+\label{eq:carbon}
+C_{\text{saved}} = \frac{E_{\text{annual}}}{\eta_{\text{EV}}} \cdot \text{EF}_{\text{ICE}} \;-\; E_{\text{annual}} \cdot \text{EF}_{\text{grid}}
+\quad [\text{tCO}_2\text{/year}]
+\end{equation}
+
+\noindent where:
+\begin{itemize}[nosep]
+    \item $\eta_{\text{EV}} = 0.18$ kWh/km is the average EV energy consumption
+    \item $\text{EF}_{\text{ICE}} = 0.21$ kgCO\textsubscript{2}/km is the average ICE emission factor
+    \item $\text{EF}_{\text{grid}} = 0.233$ kgCO\textsubscript{2}/kWh is the UK grid emission factor (2024 average)
+\end{itemize}
+
+\noindent The term $E_{\text{annual}} / \eta_{\text{EV}}$ gives the equivalent distance driven by EVs using the delivered energy. The first term represents the ICE emissions that would have occurred; the second represents the actual grid emissions from charging.
+
+%--------------------------------------------------------------
+\subsection{Grid Impact Assessment}
+\label{sec:grid}
+
+The peak electrical demand imposed on the local distribution network is estimated using a diversity factor to account for non-simultaneous charging:
+
+\begin{equation}
+\label{eq:peak}
+P_{\text{peak}} = N \cdot P \cdot f_{\text{div}}
+\quad [\text{kW}]
+\end{equation}
+
+\noindent where $f_{\text{div}} = 0.7$ is the diversity factor reflecting the probability that all chargers operate simultaneously at peak.
+
+The headroom impact expresses the peak demand as a fraction of available substation capacity:
+
+\begin{equation}
+\label{eq:headroom}
+\text{Headroom impact} = \frac{P_{\text{peak}}}{\hat{K}_h} \times 100\%
+\end{equation}
+
+\noindent where $\hat{K}_h$ is the estimated available capacity at the serving substation, derived from the normalised capacity value: $\hat{K}_h = \bar{x}_{h,7} \times 5{,}000~\text{kW}$.
+
+A headroom impact exceeding $80\%$ signals that the local substation may require reinforcement before the deployment can proceed, providing a practical constraint for infrastructure planning.
+
+%--------------------------------------------------------------
+\subsection{Socio-Demographic Coverage}
+\label{sec:socio}
+
+The population served by a charger deployment is estimated over the service area comprising the target cell and its six immediate H3 neighbours (the 1-ring):
+
+\begin{equation}
+\label{eq:pop-served}
+\text{Pop}_{\text{served}} = \rho_h \cdot A_{\text{cell}} \cdot 7
+\end{equation}
+
+\noindent The multiplier of~7 accounts for the hexagonal cell and its six adjacent cells. The deprivation score of the selected cell ($\bar{x}_{h,3}$) is reported directly as a socio-economic equity indicator, enabling planners to assess whether proposed deployments reach communities with higher levels of deprivation.
+
+%--------------------------------------------------------------
+\subsection{Financial Indicators}
+\label{sec:financial}
+
+The total installation cost is:
+
+\begin{equation}
+\label{eq:cost}
+\text{Cost}_{\text{install}} = N \cdot c_{\text{unit}}
+\quad [\text{\pounds}]
+\end{equation}
+
+\noindent where $c_{\text{unit}}$ is the per-unit cost from Table~\ref{tab:charger-specs}. Estimated annual revenue from electricity sales is:
+
+\begin{equation}
+\label{eq:revenue}
+R_{\text{annual}} = E_{\text{annual}} \cdot p_{\text{elec}}
+\quad [\text{\pounds/year}]
+\end{equation}
+
+\noindent where $p_{\text{elec}} = 0.35$~\pounds/kWh is the assumed public charging tariff. These financial indicators serve as first-order approximations for scenario comparison rather than detailed business cases.
+
+%--------------------------------------------------------------
+\subsection{Multi-Placement Aggregation}
+\label{sec:aggregation-impact}
+
+When the user places chargers at multiple locations, the platform aggregates impact estimates across all placements. Additive metrics (energy, carbon, cost, revenue, population served, peak demand) are summed. Ratio metrics (utilisation factor, headroom impact, deprivation score) are averaged:
+
+\begin{equation}
+\bar{U} = \frac{1}{|\mathcal{P}|} \sum_{p \in \mathcal{P}} U_p, \qquad
+\overline{\text{HI}} = \frac{1}{|\mathcal{P}|} \sum_{p \in \mathcal{P}} \text{HI}_p
+\end{equation}
+
+\noindent where $\mathcal{P}$ is the set of all placements in the current scenario.
+
+%--------------------------------------------------------------
+\subsection{Summary of Impact KPIs}
+\label{sec:kpi-summary}
+
+Table~\ref{tab:kpis} summarises the eight key performance indicators computed for each scenario.
+
+\begin{table}[htbp]
+\centering
+\caption{Impact KPIs reported by the platform.}
+\label{tab:kpis}
+\small
+\begin{tabular}{llll}
+\toprule
+\textbf{KPI} & \textbf{Unit} & \textbf{Equation} & \textbf{Aggregation} \\
+\midrule
+Energy delivered & kWh/year & Eq.~\ref{eq:energy} & Sum \\
+Carbon saved & tCO\textsubscript{2}/year & Eq.~\ref{eq:carbon} & Sum \\
+Installation cost & \pounds & Eq.~\ref{eq:cost} & Sum \\
+Annual revenue & \pounds/year & Eq.~\ref{eq:revenue} & Sum \\
+Peak demand & kW & Eq.~\ref{eq:peak} & Sum \\
+Headroom impact & \% & Eq.~\ref{eq:headroom} & Average \\
+Population served & persons & Eq.~\ref{eq:pop-served} & Sum \\
+Utilisation factor & \% & Eq.~\ref{eq:utilisation} & Average \\
+\bottomrule
+\end{tabular}
+\end{table}

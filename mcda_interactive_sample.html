@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCDA Sensitivity Lab</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .slider-line { stroke: #e2e8f0; stroke-width: 4; stroke-linecap: round; }
+        .slider-fill { stroke-width: 4; stroke-linecap: round; transition: stroke 0.2s; }
+        .handle { fill: #fff; stroke-width: 3; cursor: ns-resize; filter: drop-shadow(0 2px 2px rgba(0,0,0,0.1)); }
+        .handle:hover { fill: #eff6ff; }
+        .data-line { fill: none; stroke-width: 2.5; stroke-opacity: 0.15; transition: stroke-width 0.2s, stroke-opacity 0.2s; }
+        .data-line.highlight { stroke-opacity: 1; stroke-width: 5; }
+        .equation-box { font-family: 'Cambria Math', 'Times New Roman', serif; }
+        .tab-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
+        
+        /* Importance Map Styles */
+        .comparison-line { stroke: #334155; stroke-width: 2; stroke-dasharray: 4; }
+        .comparison-line.active { stroke: #60a5fa; stroke-width: 3; stroke-dasharray: 0; }
+        .puck { cursor: pointer; filter: drop-shadow(0 0 12px rgba(96, 165, 250, 0.6)); }
+        .puck-label { font-size: 10px; font-weight: bold; fill: white; pointer-events: none; }
+        .crit-node { cursor: pointer; }
+        .crit-circle { transition: r 0.2s, stroke-width 0.2s, fill-opacity 0.2s; }
+        .crit-node.selected .crit-circle { stroke: #fff; stroke-width: 4; fill-opacity: 0.4; }
+        .alt-particle { pointer-events: none; transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1); }
+        
+        /* Matrix Heatmap */
+        .cell-bar { height: 4px; border-radius: 2px; margin-top: 4px; }
+    </style>
+</head>
+<body class="bg-slate-50 min-h-screen p-4 md:p-8">
+
+    <div class="max-w-6xl mx-auto bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
+        <!-- Header -->
+        <div class="p-6 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+                <h1 class="text-2xl font-bold text-slate-800 tracking-tight">MCDA Sensitivity Lab</h1>
+                <div class="flex items-center gap-4 mt-1">
+                    <p class="text-slate-500 text-sm italic font-medium">Visual Decision Analytics</p>
+                    <div class="h-4 w-px bg-slate-300"></div>
+                    <nav class="flex gap-4 text-sm font-semibold">
+                        <button onclick="switchTab('viz')" id="tab-viz" class="pb-1 tab-active transition-all">Parallel Coordinates</button>
+                        <button onclick="switchTab('map')" id="tab-map" class="pb-1 text-slate-400 hover:text-slate-600 transition-all">Importance Map (AHP)</button>
+                        <button onclick="switchTab('matrix')" id="tab-matrix" class="pb-1 text-slate-400 hover:text-slate-600 transition-all">Matrix & AHP Diagnostics</button>
+                    </nav>
+                </div>
+            </div>
+            <div class="flex items-center gap-3">
+                <label class="text-sm font-bold text-slate-600 uppercase tracking-tighter">Method:</label>
+                <select id="method-select" class="bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-medium shadow-sm">
+                    <option value="WSM">Weighted Sum (WSM)</option>
+                    <option value="WPM">Weighted Product (WPM)</option>
+                    <option value="TOPSIS">TOPSIS (Ideal Distance)</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="flex flex-col lg:flex-row p-6 gap-8">
+            <div class="flex-grow min-h-[550px] relative">
+                
+                <!-- Parallel Coordinates Tab -->
+                <div id="content-viz" class="w-full h-full bg-slate-50/10 rounded-xl border border-slate-100">
+                    <div id="viz-container"></div>
+                </div>
+
+                <!-- Importance Map Tab -->
+                <div id="content-map" class="hidden w-full h-full bg-slate-900 rounded-xl border border-slate-800 overflow-hidden relative">
+                    <div id="map-container" class="w-full h-full"></div>
+                    <div class="absolute top-4 left-4 flex gap-2">
+                        <div class="bg-black/40 text-white/70 text-[10px] p-2 rounded backdrop-blur border border-white/10 uppercase tracking-widest font-bold">
+                            1. Click two criteria to link &nbsp; | &nbsp; 2. Drag puck to weight &nbsp; | &nbsp; 3. Scroll to zoom
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Matrix Tab -->
+                <div id="content-matrix" class="hidden w-full h-full space-y-6">
+                    <!-- AHP Diagnostics Panel -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                        <div id="ahp-cr-card" class="p-4 rounded-xl border border-slate-200 bg-white shadow-sm">
+                            <h4 class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Consistency Ratio (CR)</h4>
+                            <div id="cr-value" class="text-2xl font-mono font-bold text-slate-800">0.000</div>
+                            <p id="cr-status" class="text-[10px] mt-1 font-bold uppercase"></p>
+                        </div>
+                        <div class="p-4 rounded-xl border border-slate-200 bg-white shadow-sm">
+                            <h4 class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Active Comparisons</h4>
+                            <div id="comparison-count" class="text-2xl font-mono font-bold text-slate-800">0</div>
+                            <p class="text-[10px] mt-1 text-slate-400 font-bold uppercase">Pairwise Links</p>
+                        </div>
+                        <div class="p-4 rounded-xl border border-slate-200 bg-white shadow-sm">
+                            <h4 class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Eigenvalue (λ max)</h4>
+                            <div id="eigen-value" class="text-2xl font-mono font-bold text-slate-800">4.00</div>
+                            <p class="text-[10px] mt-1 text-slate-400 font-bold uppercase">Matrix Stability</p>
+                        </div>
+                    </div>
+
+                    <div class="overflow-x-auto rounded-xl border border-slate-200">
+                        <table class="w-full text-left border-collapse bg-white">
+                            <thead>
+                                <tr class="text-[10px] uppercase tracking-wider text-slate-500 border-b border-slate-200 bg-slate-50">
+                                    <th class="p-4 font-bold">Alternative</th>
+                                    <th id="matrix-headers" class="p-0"></th> 
+                                    <th class="p-4 font-bold text-blue-600">Final Score</th>
+                                </tr>
+                            </thead>
+                            <tbody id="matrix-body" class="text-sm text-slate-700"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sidebar -->
+            <div class="w-full lg:w-72 flex flex-col gap-4">
+                <div class="p-4 bg-white rounded-xl border border-slate-200 shadow-sm">
+                    <h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Live Ranking</h3>
+                    <div id="rankings-list" class="space-y-3"></div>
+                </div>
+                
+                <div class="p-4 bg-blue-50 rounded-xl border border-blue-100">
+                    <h3 class="text-xs font-bold text-blue-800 uppercase tracking-widest mb-1">Global Weights</h3>
+                    <div id="total-weight" class="text-2xl font-mono font-bold text-blue-600 text-center">Σ w = 1.0</div>
+                    <div class="flex items-center justify-center gap-1 mt-1">
+                        <span class="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>
+                        <p class="text-[10px] text-blue-500 uppercase font-bold tracking-widest">AHP Prioritization</p>
+                    </div>
+                </div>
+
+                <div class="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                    <h3 class="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Methodology</h3>
+                    <p id="method-desc" class="text-[11px] text-slate-600 leading-relaxed italic"></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Equation Footer -->
+        <div class="p-6 bg-slate-900 text-white flex flex-col items-center gap-2">
+            <div id="equation" class="equation-box text-lg md:text-xl italic overflow-x-auto whitespace-nowrap"></div>
+            <div class="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Mathematical Model</div>
+        </div>
+    </div>
+
+    <script>
+        // --- Data Setup ---
+        const criteria = [
+            { id: 'C1', name: 'Cost', weight: 0.25, active: true, color: '#3b82f6', isBenefit: false },
+            { id: 'C2', name: 'Quality', weight: 0.25, active: true, color: '#10b981', isBenefit: true },
+            { id: 'C3', name: 'Delivery', weight: 0.25, active: true, color: '#f59e0b', isBenefit: true },
+            { id: 'C4', name: 'Risk', weight: 0.25, active: true, color: '#ef4444', isBenefit: false }
+        ];
+
+        const alternatives = [
+            { id: 'A', name: 'Option A (Premium)', scores: { C1: 0.1, C2: 0.95, C3: 0.8, C4: 0.2 }, color: '#6366f1' },
+            { id: 'B', name: 'Option B (Budget)', scores: { C1: 0.9, C2: 0.2, C3: 0.3, C4: 0.9 }, color: '#ec4899' },
+            { id: 'C', name: 'Option C (Balanced)', scores: { C1: 0.5, C2: 0.6, C3: 0.6, C4: 0.5 }, color: '#8b5cf6' },
+            { id: 'D', name: 'Option D (Specialist)', scores: { C1: 0.3, C2: 0.4, C3: 0.9, C4: 0.4 }, color: '#f97316' }
+        ];
+
+        const RI = [0, 0, 0, 0.58, 0.9, 1.12, 1.24, 1.32, 1.41]; // Random Index for AHP
+
+        // --- State Management ---
+        const margin = { top: 70, right: 80, bottom: 80, left: 80 };
+        const height = 400;
+        let method = "WSM";
+        let hoveredId = null;
+        let currentTab = 'viz';
+        
+        let selectedCritId = null;
+        let comparisons = []; 
+
+        function init() {
+            d3.select("#method-select").on("change", function() {
+                method = this.value;
+                update();
+            });
+            update();
+        }
+
+        function switchTab(tab) {
+            currentTab = tab;
+            d3.select("#content-viz").classed("hidden", tab !== 'viz');
+            d3.select("#content-map").classed("hidden", tab !== 'map');
+            d3.select("#content-matrix").classed("hidden", tab !== 'matrix');
+            
+            d3.select("#tab-viz").classed("tab-active", tab === 'viz').classed("text-slate-400", tab !== 'viz');
+            d3.select("#tab-map").classed("tab-active", tab === 'map').classed("text-slate-400", tab !== 'map');
+            d3.select("#tab-matrix").classed("tab-active", tab === 'matrix').classed("text-slate-400", tab !== 'matrix');
+            
+            if (tab === 'map') renderImportanceMap();
+            update();
+        }
+
+        function handleWeightChange(id, newValue) {
+            const index = criteria.findIndex(d => d.id === id);
+            if (index === -1 || !criteria[index].active) return;
+            const delta = newValue - criteria[index].weight;
+            const others = criteria.filter(d => d.id !== id && d.active);
+            if (others.length > 0) {
+                const totalOthers = others.reduce((sum, d) => sum + d.weight, 0);
+                others.forEach(d => {
+                    d.weight -= (totalOthers > 0) ? (delta * (d.weight / totalOthers)) : (delta / others.length);
+                    if (d.weight < 0) d.weight = 0;
+                });
+                criteria[index].weight = newValue;
+            } else {
+                criteria[index].weight = 1.0;
+            }
+            normalize();
+            update();
+        }
+
+        function normalize() {
+            const activeItems = criteria.filter(d => d.active);
+            const sum = activeItems.reduce((s, d) => s + d.weight, 0);
+            if (sum > 0) activeItems.forEach(d => d.weight /= sum);
+            criteria.filter(d => !d.active).forEach(d => d.weight = 0);
+        }
+
+        function getAdjustedScore(alt, critId) {
+            const crit = criteria.find(c => c.id === critId);
+            const raw = alt.scores[critId];
+            return crit.isBenefit ? raw : (1 - raw);
+        }
+
+        function calculateAllScores() {
+            const active = criteria.filter(c => c.active);
+            if (active.length === 0) return alternatives.map(a => ({...a, totalScore: 0}));
+
+            if (method === "WSM") {
+                return alternatives.map(alt => ({
+                    ...alt,
+                    totalScore: active.reduce((sum, c) => sum + (getAdjustedScore(alt, c.id) * c.weight), 0)
+                }));
+            } 
+            if (method === "WPM") {
+                return alternatives.map(alt => ({
+                    ...alt,
+                    totalScore: active.reduce((prod, c) => prod * Math.pow(getAdjustedScore(alt, c.id) || 0.01, c.weight), 1)
+                }));
+            }
+            if (method === "TOPSIS") {
+                const weighted = alternatives.map(alt => {
+                    const row = {};
+                    active.forEach(c => row[c.id] = getAdjustedScore(alt, c.id) * c.weight);
+                    return { ...alt, weightedRow: row };
+                });
+                const pis = {}, nis = {};
+                active.forEach(c => {
+                    const vals = weighted.map(a => a.weightedRow[c.id]);
+                    pis[c.id] = Math.max(...vals);
+                    nis[c.id] = Math.min(...vals);
+                });
+                return weighted.map(alt => {
+                    let dPlus = 0, dMinus = 0;
+                    active.forEach(c => {
+                        dPlus += Math.pow(alt.weightedRow[c.id] - pis[c.id], 2);
+                        dMinus += Math.pow(alt.weightedRow[c.id] - nis[c.id], 2);
+                    });
+                    const closeness = (dMinus + dPlus === 0) ? 0 : Math.sqrt(dMinus) / (Math.sqrt(dPlus) + Math.sqrt(dMinus));
+                    return { ...alt, totalScore: closeness };
+                });
+            }
+        }
+
+        // --- AHP Diagnostics Calculation ---
+        function calculateAHPMetrics() {
+            const n = criteria.length;
+            // Build temporary pairwise matrix from weights (Simplified reverse-AHP for display)
+            // In a real AHP tool, weights are derived from matrix, here we use weights to check consistency of links
+            const matrix = Array(n).fill().map(() => Array(n).fill(1));
+            criteria.forEach((c1, i) => {
+                criteria.forEach((c2, j) => {
+                    if (i !== j && c2.weight > 0) {
+                        matrix[i][j] = c1.weight / c2.weight;
+                    }
+                });
+            });
+
+            // Calculate λ max
+            let lambdaMax = 0;
+            criteria.forEach((c, i) => {
+                let rowSum = 0;
+                criteria.forEach((_, j) => rowSum += matrix[i][j] * criteria[j].weight);
+                lambdaMax += rowSum / (criteria[i].weight || 1);
+            });
+            lambdaMax /= n;
+
+            const ci = (lambdaMax - n) / (n - 1);
+            const cr = ci / (RI[n] || 1);
+            
+            return {
+                lambdaMax: isFinite(lambdaMax) ? lambdaMax : n,
+                cr: isFinite(cr) ? Math.abs(cr) : 0,
+                ci: ci
+            };
+        }
+
+        function update() {
+            const results = calculateAllScores().sort((a, b) => b.totalScore - a.totalScore);
+            if (currentTab === 'viz') renderViz(results);
+            else if (currentTab === 'map') updateImportanceMap(results);
+            else renderMatrix(results);
+            renderRankings(results);
+            updateEquation();
+            updateMethodDesc();
+        }
+
+        function renderViz(results) {
+            const container = d3.select("#viz-container");
+            const width = container.node().getBoundingClientRect().width || 800;
+            container.selectAll("svg").remove();
+
+            const svg = container.append("svg")
+                .attr("width", "100%")
+                .attr("height", height + margin.top + margin.bottom)
+                .attr("viewBox", `0 0 ${width} ${height + margin.top + margin.bottom}`)
+                .append("g")
+                .attr("transform", `translate(${margin.left}, ${margin.top})`);
+
+            const innerWidth = width - margin.left - margin.right;
+            const xScale = d3.scalePoint().domain(criteria.map(d => d.id)).range([0, innerWidth]).padding(0);
+            const yScale = d3.scaleLinear().domain([0, 1]).range([height, 0]);
+
+            const lineGen = d3.line().x(d => xScale(d.id)).y(d => yScale(d.score));
+            svg.selectAll(".data-line").data(results).enter().append("path")
+                .attr("class", d => `data-line ${hoveredId === d.id ? 'highlight' : ''}`)
+                .attr("d", alt => lineGen(criteria.map(c => ({ id: c.id, score: alt.scores[c.id] }))))
+                .attr("stroke", d => d.color);
+
+            const axes = svg.selectAll(".axis-group").data(criteria).enter().append("g").attr("transform", d => `translate(${xScale(d.id)}, 0)`);
+            axes.append("line").attr("class", "slider-line").attr("y1", yScale(0)).attr("y2", yScale(1));
+            axes.append("line").attr("class", "slider-fill").attr("y1", yScale(0)).attr("y2", d => yScale(d.weight))
+                .attr("stroke", d => d.active ? d.color : "#cbd5e1");
+
+            axes.append("circle").attr("class", "handle").attr("r", 9).attr("cy", d => yScale(d.weight)).attr("stroke", d => d.active ? d.color : "#94a3b8")
+                .call(d3.drag().on("drag", function(event, d) {
+                    if (!d.active) return;
+                    handleWeightChange(d.id, Math.max(0, Math.min(1, yScale.invert(event.y))));
+                }));
+
+            axes.append("text").attr("y", -35).attr("text-anchor", "middle").attr("class", "text-xs font-bold fill-slate-800").text(d => d.name);
+            axes.append("text").attr("y", -15).attr("text-anchor", "middle").attr("class", "text-[10px] font-mono fill-slate-400 font-bold").text(d => d.active ? (d.weight * 100).toFixed(0) + "%" : "OFF");
+        }
+
+        // --- Importance Map ---
+        let mapSvg, mapG, mapZoom;
+        const critPos = {};
+
+        function renderImportanceMap() {
+            const container = d3.select("#map-container");
+            const w = container.node().getBoundingClientRect().width;
+            const h = container.node().getBoundingClientRect().height;
+            container.selectAll("*").remove();
+
+            mapZoom = d3.zoom().scaleExtent([0.5, 4]).on("zoom", (e) => mapG.attr("transform", e.transform));
+            mapSvg = container.append("svg").attr("width", "100%").attr("height", "100%").call(mapZoom);
+            mapG = mapSvg.append("g");
+
+            const radius = Math.min(w, h) * 0.35;
+            criteria.forEach((c, i) => {
+                const angle = (i / criteria.length) * Math.PI * 2 - Math.PI / 2;
+                critPos[c.id] = {
+                    x: w / 2 + Math.cos(angle) * radius,
+                    y: h / 2 + Math.sin(angle) * radius
+                };
+            });
+
+            const linkG = mapG.append("g").attr("id", "map-links");
+            const particleG = mapG.append("g").attr("id", "map-particles");
+            const nodeG = mapG.append("g").attr("id", "map-nodes");
+
+            const nodes = nodeG.selectAll(".crit-node").data(criteria).enter()
+                .append("g")
+                .attr("class", d => `crit-node ${d.id === selectedCritId ? 'selected' : ''}`)
+                .attr("transform", d => `translate(${critPos[d.id].x}, ${critPos[d.id].y})`)
+                .on("click", (e, d) => handleCritClick(d.id))
+                .on("mouseenter", function() { d3.select(this).select("circle").attr("r", 40); })
+                .on("mouseleave", function() { d3.select(this).select("circle").attr("r", 35); });
+
+            nodes.append("circle").attr("class", "crit-circle").attr("r", 35).attr("fill", d => d.color).attr("fill-opacity", 0.2).attr("stroke", d => d.color).attr("stroke-width", 2);
+            nodes.append("text").attr("text-anchor", "middle").attr("dy", 4).attr("class", "text-[10px] font-bold fill-white uppercase pointer-events-none").text(d => d.name);
+
+            const particles = particleG.selectAll(".alt-particle").data(alternatives).enter()
+                .append("g").attr("class", "alt-particle");
+            particles.append("circle").attr("r", 6).attr("fill", d => d.color).attr("stroke", "#fff").attr("stroke-width", 1.5);
+            particles.append("text").attr("dy", -12).attr("text-anchor", "middle").attr("class", "text-[9px] font-bold fill-white shadow-sm").text(d => d.id);
+
+            updateImportanceMap(calculateAllScores());
+        }
+
+        function handleCritClick(id) {
+            if (!selectedCritId) {
+                selectedCritId = id;
+            } else if (selectedCritId === id) {
+                selectedCritId = null;
+            } else {
+                const existing = comparisons.find(c => (c.id1 === selectedCritId && c.id2 === id) || (c.id1 === id && c.id2 === selectedCritId));
+                if (!existing) comparisons.push({ id1: selectedCritId, id2: id, ratio: 0.5 });
+                selectedCritId = null;
+            }
+            update();
+        }
+
+        function updateImportanceMap(results) {
+            if (!mapG) return;
+            mapG.selectAll(".crit-node").classed("selected", d => d.id === selectedCritId);
+            const linkSelection = mapG.select("#map-links").selectAll(".comparison-link").data(comparisons, d => `${d.id1}-${d.id2}`);
+            const linkEnter = linkSelection.enter().append("g").attr("class", "comparison-link");
+            linkEnter.append("line").attr("class", "comparison-line active");
+            linkEnter.append("circle").attr("class", "puck").attr("r", 12).attr("fill", "#60a5fa");
+            linkEnter.append("text").attr("class", "puck-label").attr("text-anchor", "middle").attr("dy", 4);
+
+            const linkUpdate = linkEnter.merge(linkSelection);
+            linkUpdate.select("line").attr("x1", d => critPos[d.id1].x).attr("y1", d => critPos[d.id1].y).attr("x2", d => critPos[d.id2].x).attr("y2", d => critPos[d.id2].y);
+            linkUpdate.select(".puck")
+                .attr("cx", d => critPos[d.id1].x + (critPos[d.id2].x - critPos[d.id1].x) * (1 - d.ratio))
+                .attr("cy", d => critPos[d.id1].y + (critPos[d.id2].y - critPos[d.id1].y) * (1 - d.ratio))
+                .call(d3.drag().on("drag", function(event, d) {
+                    const x1 = critPos[d.id1].x, y1 = critPos[d.id1].y, x2 = critPos[d.id2].x, y2 = critPos[d.id2].y;
+                    const dx = x2 - x1, dy = y2 - y1;
+                    const lenSq = dx*dx + dy*dy;
+                    const t = Math.max(0.1, Math.min(0.9, ((event.x - x1) * dx + (event.y - y1) * dy) / lenSq));
+                    d.ratio = 1 - t;
+                    applyAHPLogic(); update();
+                }));
+
+            linkUpdate.select("text")
+                .attr("x", d => critPos[d.id1].x + (critPos[d.id2].x - critPos[d.id1].x) * (1 - d.ratio))
+                .attr("y", d => critPos[d.id1].y + (critPos[d.id2].y - critPos[d.id1].y) * (1 - d.ratio))
+                .text(d => d.ratio > 0.55 ? "↑" : d.ratio < 0.45 ? "↓" : "•");
+
+            linkSelection.exit().remove();
+            mapG.selectAll(".alt-particle").attr("transform", alt => {
+                    let tx = 0, ty = 0, tw = 0;
+                    criteria.forEach(c => {
+                        if (!c.active) return;
+                        const w = c.weight * getAdjustedScore(alt, c.id);
+                        tx += critPos[c.id].x * w; ty += critPos[c.id].y * w; tw += w;
+                    });
+                    if (tw === 0) return `translate(0,0)`;
+                    return `translate(${tx/tw},${ty/tw})`;
+                });
+        }
+
+        function applyAHPLogic() {
+            comparisons.forEach(comp => {
+                const c1 = criteria.find(c => c.id === comp.id1), c2 = criteria.find(c => c.id === comp.id2);
+                const total = c1.weight + c2.weight;
+                if (total > 0) { c1.weight = total * comp.ratio; c2.weight = total * (1 - comp.ratio); }
+            });
+            normalize();
+        }
+
+        // --- Matrix View & AHP Diagnostics ---
+        function renderMatrix(results) {
+            const metrics = calculateAHPMetrics();
+            d3.select("#cr-value").text(metrics.cr.toFixed(3));
+            d3.select("#comparison-count").text(comparisons.length);
+            d3.select("#eigen-value").text(metrics.lambdaMax.toFixed(2));
+            
+            const crCard = d3.select("#ahp-cr-card");
+            const crStatus = d3.select("#cr-status");
+            if (metrics.cr < 0.1) {
+                crCard.attr("class", "p-4 rounded-xl border border-green-200 bg-green-50 shadow-sm");
+                crStatus.text("Consistent ✅").attr("class", "text-[10px] mt-1 font-bold uppercase text-green-600");
+            } else {
+                crCard.attr("class", "p-4 rounded-xl border border-amber-200 bg-amber-50 shadow-sm");
+                crStatus.text("Inconsistent ⚠️").attr("class", "text-[10px] mt-1 font-bold uppercase text-amber-600");
+            }
+
+            const h = d3.select("#matrix-headers"); h.selectAll("*").remove();
+            criteria.forEach(c => {
+                const th = h.append("th").attr("class", `p-4 font-bold border-b border-slate-200 bg-slate-50/50 ${c.active ? '' : 'opacity-30'}`);
+                th.append("div").style("color", c.color).text(c.name);
+                th.append("div").attr("class", "text-[9px] text-slate-400 font-mono mt-0.5").text(`W: ${(c.weight*100).toFixed(0)}%`);
+            });
+
+            const body = d3.select("#matrix-body"); body.selectAll("*").remove();
+            results.forEach(alt => {
+                const tr = body.append("tr").attr("class", `border-b border-slate-100 hover:bg-slate-50 transition-colors ${hoveredId === alt.id ? 'bg-blue-50/30' : ''}`);
+                tr.append("td").attr("class", "p-4 font-bold text-slate-800").text(alt.name);
+                criteria.forEach(c => {
+                    const raw = alt.scores[c.id]; 
+                    const adj = getAdjustedScore(alt, c.id);
+                    const contrib = (adj * c.weight); // Contribution to final score
+                    const td = tr.append("td").attr("class", `p-4 ${c.active ? '' : 'opacity-30'}`);
+                    td.append("div").attr("class", "flex justify-between items-end").html(`
+                        <span class="text-[10px] text-slate-400 font-mono">S: ${adj.toFixed(2)}</span>
+                        <span class="text-[10px] text-slate-600 font-bold">+${contrib.toFixed(2)}</span>
+                    `);
+                    td.append("div").attr("class", "cell-bar bg-slate-100 w-full").append("div")
+                      .attr("class", "h-full rounded-full transition-all")
+                      .style("width", `${adj * 100}%`)
+                      .style("background-color", c.color);
+                });
+                tr.append("td").attr("class", "p-4 font-mono font-bold text-blue-600 bg-blue-50/20 text-right").text(alt.totalScore.toFixed(3));
+            });
+        }
+
+        function renderRankings(results) {
+            const list = d3.select("#rankings-list"); list.selectAll("*").remove();
+            results.forEach((alt, i) => {
+                const row = list.append("div").attr("class", `p-2 rounded-lg cursor-pointer transition-all ${hoveredId === alt.id ? 'bg-slate-100 shadow-sm scale-[1.02]' : ''}`)
+                    .on("mouseover", () => { hoveredId = alt.id; update(); }).on("mouseout", () => { hoveredId = null; update(); });
+                const header = row.append("div").attr("class", "flex justify-between items-center text-xs mb-1");
+                header.append("span").attr("class", "font-bold text-slate-700 uppercase tracking-tighter").text(`${i+1}. ${alt.name}`);
+                header.append("span").attr("class", "font-mono font-bold text-blue-600").text(alt.totalScore.toFixed(3));
+                row.append("div").attr("class", "w-full bg-slate-200 h-1 rounded-full overflow-hidden").append("div").attr("class", "h-full transition-all duration-300").style("width", `${alt.totalScore * 100}%`).style("background-color", alt.color);
+            });
+        }
+
+        function updateMethodDesc() {
+            const descs = { WSM: "Weighted Sum: Scores are multiplied by weights and summed.", WPM: "Weighted Product: Alternatives are compared by multiplying scores raised to the power of weights.", TOPSIS: "TOPSIS: Measures Euclidean distance to the 'Ideal Best' and 'Ideal Worst' solutions." };
+            d3.select("#method-desc").text(descs[method]);
+        }
+
+        function updateEquation() {
+            const container = d3.select("#equation");
+            if (method === "WSM") container.text("$ Score = \\sum_{i=1}^{n} (w_i \\cdot S_i^{adj}) $");
+            else if (method === "WPM") container.text("$ Score = \\prod_{i=1}^{n} (S_i^{adj})^{w_i} $");
+            else container.text("$ Score = \\frac{D^-}{D^- + D^+} \\text{ where } D \\text{ is Euclidean distance} $");
+        }
+
+        window.addEventListener('resize', () => { if(currentTab === 'map') renderImportanceMap(); update(); });
+            init();
+    </script>
+</html>
+</body>
