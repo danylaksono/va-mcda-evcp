@@ -2,6 +2,9 @@ import React, { useState, useMemo } from 'react'
 import { useMCDAStore } from '@/store/mcda-store'
 import { solveAHP } from '@/analysis/ahp-solver'
 
+const MIN_ZOOM = 0.45
+const MAX_ZOOM = 5
+
 const AHP_SCALE_LABELS: Record<number, string> = {
   1: 'Equal',
   3: 'Moderate',
@@ -23,7 +26,10 @@ export function AHPComparison() {
   const [selectedPair, setSelectedPair] = useState<[string, string] | null>(null)
   const [pendingNode, setPendingNode] = useState<string | null>(null)
   const [dragging, setDragging] = useState<{ c1: string; c2: string } | null>(null)
-  const [zoom, setZoom] = useState(1)
+  const [editingCell, setEditingCell] = useState<{ rowId: string; colId: string } | null>(null)
+  const [editingValue, setEditingValue] = useState('1')
+  const [view, setView] = useState({ x: 0, y: 0, scale: 1 })
+  const [panState, setPanState] = useState<{ pointerX: number; pointerY: number; baseX: number; baseY: number } | null>(null)
 
   const activeCriteria = criteria.filter((c) => c.active)
 
@@ -84,17 +90,66 @@ export function AHPComparison() {
     }
   }
 
+  function clearSelection() {
+    setPendingNode(null)
+    setSelectedPair(null)
+    setEditingCell(null)
+  }
+
+  function startCellEdit(rowId: string, colId: string) {
+    if (rowId === colId) return
+    const currentValue = getComparisonValue(rowId, colId) ?? 1
+    handleCellClick(rowId, colId)
+    setEditingCell({ rowId, colId })
+    setEditingValue(currentValue.toFixed(3).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1'))
+  }
+
+  function commitCellEdit() {
+    if (!editingCell) return
+    const parsed = Number(editingValue)
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      setEditingCell(null)
+      return
+    }
+    const clamped = Math.max(1 / 9, Math.min(9, parsed))
+    updateComparison(editingCell.rowId, editingCell.colId, clamped)
+    setSelectedPair([editingCell.rowId, editingCell.colId])
+    setEditingCell(null)
+  }
+
+  function clientToGraphPoint(svg: SVGSVGElement, clientX: number, clientY: number) {
+    const rect = svg.getBoundingClientRect()
+    const svgX = clientX - rect.left
+    const svgY = clientY - rect.top
+    return {
+      x: (svgX - view.x) / view.scale,
+      y: (svgY - view.y) / view.scale,
+    }
+  }
+
+  function handleGraphPointerDown(e: React.PointerEvent<SVGSVGElement>) {
+    if (dragging) return
+    if (e.target !== e.currentTarget) return
+    clearSelection()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    setPanState({
+      pointerX: e.clientX,
+      pointerY: e.clientY,
+      baseX: view.x,
+      baseY: view.y,
+    })
+  }
+
   function handleGraphPointerMove(e: React.PointerEvent<SVGSVGElement>) {
+    if (panState) {
+      const dx = e.clientX - panState.pointerX
+      const dy = e.clientY - panState.pointerY
+      setView((prev) => ({ ...prev, x: panState.baseX + dx, y: panState.baseY + dy }))
+      return
+    }
     if (!dragging) return
     const svg = e.currentTarget
-    const pt = svg.createSVGPoint()
-    pt.x = e.clientX
-    pt.y = e.clientY
-    
-    // Convert to SVG coordinates
-    const screenCTM = svg.getScreenCTM()
-    if (!screenCTM) return
-    const cursorPt = pt.matrixTransform(screenCTM.inverse())
+    const cursorPt = clientToGraphPoint(svg, e.clientX, e.clientY)
     
     const p1 = nodePositions.get(dragging.c1)
     const p2 = nodePositions.get(dragging.c2)
@@ -117,14 +172,31 @@ export function AHPComparison() {
   }
 
   function handleGraphPointerUp() {
+    setPanState(null)
     setDragging(null)
   }
 
   function handleGraphWheel(e: React.WheelEvent<SVGSVGElement>) {
-    setZoom((prev) => Math.max(0.5, Math.min(3, prev - e.deltaY * 0.001)))
+    e.preventDefault()
+    const svg = e.currentTarget
+    const rect = svg.getBoundingClientRect()
+    const pointerX = e.clientX - rect.left
+    const pointerY = e.clientY - rect.top
+
+    setView((prev) => {
+      const zoomFactor = e.deltaY < 0 ? 1.12 : 0.9
+      const nextScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev.scale * zoomFactor))
+      const worldX = (pointerX - prev.x) / prev.scale
+      const worldY = (pointerY - prev.y) / prev.scale
+      return {
+        scale: nextScale,
+        x: pointerX - worldX * nextScale,
+        y: pointerY - worldY * nextScale,
+      }
+    })
   }
 
-  const radius = 100
+  const radius = 118
   const center = 150
   const nodePositions = new Map(
     activeCriteria.map((c, i) => {
@@ -156,7 +228,7 @@ export function AHPComparison() {
   }, [alternatives, activeCriteria, currentWeights, nodePositions, center])
 
   return (
-    <div className="space-y-4">
+    <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="flex items-center justify-between">
         <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
           Pairwise Comparison
@@ -198,19 +270,24 @@ export function AHPComparison() {
         </div>
       )}
 
-      {/* View Content */}
-      <div 
-        className="flex justify-center items-center py-4 bg-slate-50 rounded-lg border border-slate-200 relative min-h-[300px]"
-      >
-        <svg 
-          width="300" height="300" 
-          className="overflow-visible"
-          onPointerMove={handleGraphPointerMove}
-          onPointerUp={handleGraphPointerUp}
-          onPointerLeave={handleGraphPointerUp}
-          onWheel={handleGraphWheel}
+      <div className="flex min-h-0 flex-1 flex-col gap-3">
+        {/* View Content */}
+        <div 
+          className="relative flex flex-[3] items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-gradient-to-br from-slate-50 via-white to-sky-50 min-h-[330px]"
         >
-          <g transform={`scale(${zoom})`} style={{ transformOrigin: 'center' }}>
+          <svg 
+            width="100%" height="100%" viewBox="0 0 300 300"
+            className={`${panState ? 'cursor-grabbing' : 'cursor-grab'} h-full w-full`}
+            onPointerDown={handleGraphPointerDown}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) clearSelection()
+            }}
+            onPointerMove={handleGraphPointerMove}
+            onPointerUp={handleGraphPointerUp}
+            onPointerLeave={handleGraphPointerUp}
+            onWheel={handleGraphWheel}
+          >
+            <g transform={`translate(${view.x} ${view.y}) scale(${view.scale})`}>
             <g id="links">
               {comparisons.map((comp, idx) => {
                 const p1 = nodePositions.get(comp.criterion1)
@@ -235,7 +312,7 @@ export function AHPComparison() {
                       x2={p2.x}
                       y2={p2.y}
                       stroke={isSelected ? '#3b82f6' : '#cbd5e1'}
-                      strokeWidth={isSelected ? 3 : 2}
+                      strokeWidth={isSelected ? 2.5 : 1.75}
                       className="transition-all duration-300"
                       strokeDasharray={isSelected ? 'none' : '4'}
                     />
@@ -249,20 +326,18 @@ export function AHPComparison() {
                         setSelectedPair([comp.criterion1, comp.criterion2])
                       }}
                     >
+                      <circle r={11} fill="transparent" />
                       <circle
-                        r={12}
+                        r={isSelected ? 6 : 5}
                         fill="#3b82f6"
-                        className="shadow-sm cursor-grab active:cursor-grabbing hover:fill-blue-400 transition-colors"
-                        style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' }}
+                        fillOpacity={isSelected ? 0.82 : 0.58}
+                        stroke="#ffffff"
+                        strokeOpacity={0.9}
+                        strokeWidth={isSelected ? 1.3 : 1}
+                        className="cursor-grab active:cursor-grabbing hover:fill-opacity-80 transition-all duration-200"
+                        style={{ filter: 'drop-shadow(0 1px 2px rgba(15,23,42,0.14))' }}
                       />
-                      <text
-                        textAnchor="middle"
-                        dy="4"
-                        fill="white"
-                        className="text-[10px] font-bold pointer-events-none select-none"
-                      >
-                        {comp.ratio > 1.2 ? '↑' : comp.ratio < 0.8 ? '↓' : '•'}
-                      </text>
+                      {isSelected && <circle r={1.2} fill="white" className="pointer-events-none" />}
                     </g>
                   </g>
                 )
@@ -282,19 +357,19 @@ export function AHPComparison() {
                     className="cursor-pointer"
                   >
                     <circle
-                      r={isSelectedNode ? 24 : 20}
+                      r={isSelectedNode ? 19 : 16}
                       fill={c.color}
                       className="transition-all duration-300 shadow-sm hover:fill-opacity-100"
                       fillOpacity={isSelectedNode ? 1 : 0.8}
                       stroke={isSelectedNode ? '#fff' : 'none'}
-                      strokeWidth={isSelectedNode ? 3 : 0}
+                      strokeWidth={isSelectedNode ? 2.5 : 0}
                       style={{ filter: isSelectedNode ? 'drop-shadow(0 2px 6px rgba(0,0,0,0.15))' : 'none' }}
                     />
                     <text
                       textAnchor="middle"
                       dy=".3em"
                       fill="#fff"
-                      className="text-[10px] font-bold pointer-events-none select-none"
+                      className="text-[9px] font-bold pointer-events-none select-none"
                     >
                       {c.name.substring(0, 3).toUpperCase()}
                     </text>
@@ -305,34 +380,60 @@ export function AHPComparison() {
             <g id="particles">
               {particlePositions.map((alt, i) => (
                 <g key={i} transform={`translate(${alt.x}, ${alt.y})`} className="transition-transform duration-500 ease-out pointer-events-none">
-                  <circle r={6} fill={alt.color} stroke="#fff" strokeWidth={1.5} style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))' }} />
+                  <circle r={4.5} fill={alt.color} stroke="#fff" strokeWidth={1.2} style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))' }} />
                   <text dy="-10" textAnchor="middle" className="text-[9px] font-bold fill-slate-700 shadow-sm">
                     {alt.name}
                   </text>
                 </g>
               ))}
             </g>
-          </g>
-        </svg>
-        <div className="absolute top-2 right-2 flex flex-col items-end">
+            </g>
+          </svg>
+          <div className="absolute top-2 right-2 flex flex-col items-end gap-1">
           {pendingNode && (
             <div className="text-[10px] bg-brand-100 text-brand-700 px-2 py-1 rounded shadow-sm">
               Select another node to compare
             </div>
           )}
           {!pendingNode && comparisons.length > 0 && (
-             <div className="text-[10px] text-slate-400 bg-white/80 px-2 py-1 rounded shadow-sm mb-1">
+             <div className="text-[10px] text-slate-500 bg-white/85 px-2 py-1 rounded shadow-sm">
                Drag the blue puck to adjust weight
              </div>
           )}
-          <div className="text-[9px] text-slate-400 bg-white/80 px-2 py-1 rounded shadow-sm">
-            Scroll to zoom in/out
+          {/* <div className="text-[9px] text-slate-500 bg-white/85 px-2 py-1 rounded shadow-sm">
+            Scroll to zoom, drag canvas to pan
+          </div> */}
+          {/* <div className="flex items-center gap-1 rounded-md bg-white/90 border border-slate-200 px-1.5 py-1 shadow-sm">
+            <button
+              type="button"
+              onClick={() => setView((prev) => ({ ...prev, scale: Math.max(MIN_ZOOM, prev.scale * 0.9) }))}
+              className="h-5 w-5 text-xs font-bold text-slate-600 rounded hover:bg-slate-100"
+              aria-label="Zoom out"
+            >
+              -
+            </button>
+            <span className="text-[9px] font-mono text-slate-500 w-10 text-center">{Math.round(view.scale * 100)}%</span>
+            <button
+              type="button"
+              onClick={() => setView((prev) => ({ ...prev, scale: Math.min(MAX_ZOOM, prev.scale * 1.1) }))}
+              className="h-5 w-5 text-xs font-bold text-slate-600 rounded hover:bg-slate-100"
+              aria-label="Zoom in"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              onClick={() => setView({ x: 0, y: 0, scale: 1 })}
+              className="text-[9px] text-slate-600 px-1.5 py-0.5 rounded border border-slate-200 hover:bg-slate-50"
+            >
+              Reset
+            </button>
+          </div> */}
           </div>
         </div>
-      </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-[10px] border-collapse">
+        <div className="flex-[2] min-h-[230px] overflow-auto rounded-lg border border-slate-200 bg-white">
+          <table className="w-full text-[10px] border-collapse">
           <thead>
             <tr>
               <th className="p-1.5 bg-slate-50 border border-slate-200" />
@@ -358,6 +459,8 @@ export function AHPComparison() {
                 </td>
                 {activeCriteria.map((col) => {
                   const value = row.id === col.id ? 1 : getComparisonValue(row.id, col.id)
+                  const isEditing =
+                    editingCell && editingCell.rowId === row.id && editingCell.colId === col.id
                   const isSelected =
                     selectedPair &&
                     ((selectedPair[0] === row.id && selectedPair[1] === col.id) ||
@@ -367,6 +470,11 @@ export function AHPComparison() {
                     <td
                       key={col.id}
                       onClick={() => handleCellClick(row.id, col.id)}
+                      onDoubleClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        startCellEdit(row.id, col.id)
+                      }}
                       className={`p-1.5 border border-slate-200 text-center font-mono cursor-pointer transition-colors
                         ${row.id === col.id ? 'bg-slate-100 text-slate-400' : ''}
                         ${isSelected ? 'bg-brand-50 ring-1 ring-brand-400' : 'hover:bg-slate-50'}
@@ -374,14 +482,40 @@ export function AHPComparison() {
                         ${value && value < 1 ? 'text-slate-400' : ''}
                       `}
                     >
-                      {value !== null ? value.toFixed(2) : '—'}
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          min={1 / 9}
+                          max={9}
+                          step={0.01}
+                          value={editingValue}
+                          autoFocus
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setEditingValue(e.target.value)}
+                          onBlur={commitCellEdit}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              commitCellEdit()
+                            }
+                            if (e.key === 'Escape') {
+                              e.preventDefault()
+                              setEditingCell(null)
+                            }
+                          }}
+                          className="w-16 rounded border border-brand-300 bg-white px-1 py-0.5 text-center text-[10px] font-mono text-slate-700 outline-none ring-1 ring-brand-300"
+                        />
+                      ) : (
+                        value !== null ? value.toFixed(2) : '—'
+                      )}
                     </td>
                   )
                 })}
               </tr>
             ))}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
 
       {/* Slider for selected pair */}
