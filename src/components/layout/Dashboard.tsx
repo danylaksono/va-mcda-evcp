@@ -14,7 +14,12 @@ type TabId = 'pcp' | 'ahp' | 'matrix'
 
 interface DashboardProps {
   totalRows: number
-  mcdaResults: Array<{ h3_cell: string; mcda_score: number }>
+  mcdaResults: Array<{
+    h3_cell: string
+    mcda_score: number
+    criterion_values?: Record<string, number>
+    raw_values?: Record<string, number>
+  }>
 }
 
 export function Dashboard({ totalRows, mcdaResults }: DashboardProps) {

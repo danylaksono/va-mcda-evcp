@@ -70,6 +70,8 @@ export function useDataLoader() {
 interface MCDAQueryResult {
   h3_cell: string
   mcda_score: number
+  criterion_values?: Record<string, number>
+  raw_values?: Record<string, number>
 }
 
 /**
@@ -92,14 +94,69 @@ export function useMCDAQuery() {
       setComputing(true)
       const start = performance.now()
 
-      const sql = buildMCDAQuery(method, criteria)
-      const rawData = await query<MCDAQueryResult>(sql)
+      const baseSql = buildMCDAQuery(method, criteria)
+      const activeCriteria = criteria.filter((c) => c.active)
+      const criterionSelect = activeCriteria
+        .map((c) => {
+          const orientedExpr = c.polarity === 'cost' ? `(1 - base.${c.normalizedField})` : `base.${c.normalizedField}`
+          return `${orientedExpr} AS criterion_${c.id}`
+        })
+        .join(',\n  ')
+      const rawSelect = activeCriteria
+        .map((c) => `base.${c.field} AS raw_${c.id}`)
+        .join(',\n  ')
+      const extraSelect = [criterionSelect, rawSelect].filter(Boolean).join(',\n  ')
+
+      const sql = extraSelect
+        ? `
+WITH scored AS (
+  ${baseSql}
+)
+SELECT
+  scored.h3_cell,
+  scored.mcda_score,
+  ${extraSelect}
+FROM scored
+JOIN mcda_base base USING (h3_cell)
+ORDER BY scored.mcda_score DESC`
+        : baseSql
+
+      const rawRows = await query<Record<string, unknown>>(sql)
+      const rawData: MCDAQueryResult[] = rawRows.map((row) => {
+        const criterionValues: Record<string, number> = {}
+        const rawValues: Record<string, number> = {}
+        for (const criterion of activeCriteria) {
+          const normalizedKey = `criterion_${criterion.id}`
+          const normalizedValue = Number(row[normalizedKey])
+          if (Number.isFinite(normalizedValue)) {
+            criterionValues[criterion.id] = normalizedValue
+          }
+
+          const rawKey = `raw_${criterion.id}`
+          const rawValue = Number(row[rawKey])
+          if (Number.isFinite(rawValue)) {
+            rawValues[criterion.id] = rawValue
+          }
+        }
+
+        return {
+          h3_cell: String(row.h3_cell),
+          mcda_score: Number(row.mcda_score),
+          criterion_values: criterionValues,
+          raw_values: rawValues,
+        }
+      })
 
       const displayResolution = zoomToH3Resolution(zoom)
 
       let data: MCDAQueryResult[]
       if (displayResolution < 10) {
-        const groups = new Map<string, { sum: number; count: number }>()
+        const groups = new Map<string, {
+          sum: number
+          count: number
+          criterionSums: Record<string, number>
+          rawSums: Record<string, number>
+        }>()
         for (const row of rawData) {
           try {
             const parentCell = cellToParent(row.h3_cell, displayResolution)
@@ -107,17 +164,51 @@ export function useMCDAQuery() {
             if (existing) {
               existing.sum += row.mcda_score
               existing.count += 1
+              if (row.criterion_values) {
+                for (const [criterionId, value] of Object.entries(row.criterion_values)) {
+                  existing.criterionSums[criterionId] = (existing.criterionSums[criterionId] ?? 0) + value
+                }
+              }
+              if (row.raw_values) {
+                for (const [criterionId, value] of Object.entries(row.raw_values)) {
+                  existing.rawSums[criterionId] = (existing.rawSums[criterionId] ?? 0) + value
+                }
+              }
             } else {
-              groups.set(parentCell, { sum: row.mcda_score, count: 1 })
+              const criterionSums: Record<string, number> = {}
+              const rawSums: Record<string, number> = {}
+              if (row.criterion_values) {
+                for (const [criterionId, value] of Object.entries(row.criterion_values)) {
+                  criterionSums[criterionId] = value
+                }
+              }
+              if (row.raw_values) {
+                for (const [criterionId, value] of Object.entries(row.raw_values)) {
+                  rawSums[criterionId] = value
+                }
+              }
+              groups.set(parentCell, { sum: row.mcda_score, count: 1, criterionSums, rawSums })
             }
           } catch {
             // skip invalid cells
           }
         }
-        data = Array.from(groups.entries()).map(([cell, { sum, count }]) => ({
-          h3_cell: cell,
-          mcda_score: sum / count,
-        }))
+        data = Array.from(groups.entries()).map(([cell, { sum, count, criterionSums, rawSums }]) => {
+          const criterionValues: Record<string, number> = {}
+          const rawValues: Record<string, number> = {}
+          for (const [criterionId, value] of Object.entries(criterionSums)) {
+            criterionValues[criterionId] = value / count
+          }
+          for (const [criterionId, value] of Object.entries(rawSums)) {
+            rawValues[criterionId] = value / count
+          }
+          return {
+            h3_cell: cell,
+            mcda_score: sum / count,
+            criterion_values: criterionValues,
+            raw_values: rawValues,
+          }
+        })
       } else {
         data = rawData
       }
