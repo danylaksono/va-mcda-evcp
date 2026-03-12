@@ -25,11 +25,11 @@ export function AHPComparison() {
 
   const [selectedPair, setSelectedPair] = useState<[string, string] | null>(null)
   const [pendingNode, setPendingNode] = useState<string | null>(null)
-  const [dragging, setDragging] = useState<{ c1: string; c2: string } | null>(null)
+  const [dragging, setDragging] = useState<{ c1: string; c2: string; pointerId: number; offsetT: number } | null>(null)
   const [editingCell, setEditingCell] = useState<{ rowId: string; colId: string } | null>(null)
   const [editingValue, setEditingValue] = useState('1')
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 })
-  const [panState, setPanState] = useState<{ pointerX: number; pointerY: number; baseX: number; baseY: number } | null>(null)
+  const [panState, setPanState] = useState<{ pointerId: number; pointerX: number; pointerY: number; baseX: number; baseY: number } | null>(null)
 
   const activeCriteria = criteria.filter((c) => c.active)
 
@@ -127,12 +127,30 @@ export function AHPComparison() {
     }
   }
 
+  function ratioToT(ratio: number) {
+    return (1 - Math.log(ratio) / Math.log(9)) / 2
+  }
+
+  function projectPointToSegmentT(
+    point: { x: number; y: number },
+    p1: { x: number; y: number },
+    p2: { x: number; y: number }
+  ) {
+    const dx = p2.x - p1.x
+    const dy = p2.y - p1.y
+    const lenSq = dx * dx + dy * dy
+    if (lenSq === 0) return null
+    return ((point.x - p1.x) * dx + (point.y - p1.y) * dy) / lenSq
+  }
+
   function handleGraphPointerDown(e: React.PointerEvent<SVGSVGElement>) {
     if (dragging) return
     if (e.target !== e.currentTarget) return
     clearSelection()
+    e.preventDefault()
     e.currentTarget.setPointerCapture(e.pointerId)
     setPanState({
+      pointerId: e.pointerId,
       pointerX: e.clientX,
       pointerY: e.clientY,
       baseX: view.x,
@@ -142,12 +160,14 @@ export function AHPComparison() {
 
   function handleGraphPointerMove(e: React.PointerEvent<SVGSVGElement>) {
     if (panState) {
+      if (e.pointerId !== panState.pointerId) return
       const dx = e.clientX - panState.pointerX
       const dy = e.clientY - panState.pointerY
       setView((prev) => ({ ...prev, x: panState.baseX + dx, y: panState.baseY + dy }))
       return
     }
     if (!dragging) return
+    if (e.pointerId !== dragging.pointerId) return
     const svg = e.currentTarget
     const cursorPt = clientToGraphPoint(svg, e.clientX, e.clientY)
     
@@ -155,13 +175,11 @@ export function AHPComparison() {
     const p2 = nodePositions.get(dragging.c2)
     if (!p1 || !p2) return
 
-    const dx = p2.x - p1.x
-    const dy = p2.y - p1.y
-    const lenSq = dx * dx + dy * dy
-    if (lenSq === 0) return
+    const projectedT = projectPointToSegmentT(cursorPt, p1, p2)
+    if (projectedT === null) return
 
-    // Project cursor onto line segment to find t (0.0 to 1.0)
-    let t = ((cursorPt.x - p1.x) * dx + (cursorPt.y - p1.y) * dy) / lenSq
+    // Preserve grab offset to avoid snap when pointer starts away from puck center.
+    let t = projectedT - dragging.offsetT
     t = Math.max(0.1, Math.min(0.9, t)) // keep puck somewhat inside the line
 
     // Map t [0..1] to ratio. 
@@ -171,7 +189,10 @@ export function AHPComparison() {
     updateComparison(dragging.c1, dragging.c2, ratio)
   }
 
-  function handleGraphPointerUp() {
+  function handleGraphPointerUp(e: React.PointerEvent<SVGSVGElement>) {
+    if (panState && e.currentTarget.hasPointerCapture(panState.pointerId)) {
+      e.currentTarget.releasePointerCapture(panState.pointerId)
+    }
     setPanState(null)
     setDragging(null)
   }
@@ -278,13 +299,14 @@ export function AHPComparison() {
           <svg 
             width="100%" height="100%" viewBox="0 0 300 300"
             className={`${panState ? 'cursor-grabbing' : 'cursor-grab'} h-full w-full`}
+            style={{ touchAction: 'none' }}
             onPointerDown={handleGraphPointerDown}
             onClick={(e) => {
               if (e.target === e.currentTarget) clearSelection()
             }}
             onPointerMove={handleGraphPointerMove}
             onPointerUp={handleGraphPointerUp}
-            onPointerLeave={handleGraphPointerUp}
+            onPointerCancel={handleGraphPointerUp}
             onWheel={handleGraphWheel}
           >
             <g transform={`translate(${view.x} ${view.y}) scale(${view.scale})`}>
@@ -299,11 +321,6 @@ export function AHPComparison() {
                   ((selectedPair[0] === comp.criterion1 && selectedPair[1] === comp.criterion2) ||
                     (selectedPair[0] === comp.criterion2 && selectedPair[1] === comp.criterion1))
 
-                // t maps between 0 and 1. 0.5 is equal (ratio=1)
-                const t = (1 - Math.log(comp.ratio) / Math.log(9)) / 2
-                const puckX = p1.x + (p2.x - p1.x) * t
-                const puckY = p1.y + (p2.y - p1.y) * t
-
                 return (
                   <g key={idx}>
                     <line
@@ -316,29 +333,6 @@ export function AHPComparison() {
                       className="transition-all duration-300"
                       strokeDasharray={isSelected ? 'none' : '4'}
                     />
-                    <g 
-                      transform={`translate(${puckX}, ${puckY})`}
-                      style={{ cursor: 'grab' }}
-                      onPointerDown={(e) => {
-                        e.stopPropagation()
-                        setDragging({ c1: comp.criterion1, c2: comp.criterion2 })
-                        // Also auto-select the pair when interacting with its puck
-                        setSelectedPair([comp.criterion1, comp.criterion2])
-                      }}
-                    >
-                      <circle r={11} fill="transparent" />
-                      <circle
-                        r={isSelected ? 6 : 5}
-                        fill="#3b82f6"
-                        fillOpacity={isSelected ? 0.82 : 0.58}
-                        stroke="#ffffff"
-                        strokeOpacity={0.9}
-                        strokeWidth={isSelected ? 1.3 : 1}
-                        className="cursor-grab active:cursor-grabbing hover:fill-opacity-80 transition-all duration-200"
-                        style={{ filter: 'drop-shadow(0 1px 2px rgba(15,23,42,0.14))' }}
-                      />
-                      {isSelected && <circle r={1.2} fill="white" className="pointer-events-none" />}
-                    </g>
                   </g>
                 )
               })}
@@ -386,6 +380,66 @@ export function AHPComparison() {
                   </text>
                 </g>
               ))}
+            </g>
+            <g id="pucks">
+              {comparisons.map((comp, idx) => {
+                const p1 = nodePositions.get(comp.criterion1)
+                const p2 = nodePositions.get(comp.criterion2)
+                if (!p1 || !p2) return null
+
+                const isSelected =
+                  selectedPair &&
+                  ((selectedPair[0] === comp.criterion1 && selectedPair[1] === comp.criterion2) ||
+                    (selectedPair[0] === comp.criterion2 && selectedPair[1] === comp.criterion1))
+
+                const t = ratioToT(comp.ratio)
+                const puckX = p1.x + (p2.x - p1.x) * t
+                const puckY = p1.y + (p2.y - p1.y) * t
+                const hitRadius = 12 / view.scale
+                const visibleRadius = (isSelected ? 6 : 5) / view.scale
+                const centerRadius = 1.2 / view.scale
+
+                return (
+                  <g
+                    key={`puck-${idx}`}
+                    transform={`translate(${puckX}, ${puckY})`}
+                    style={{ cursor: 'grab', touchAction: 'none' }}
+                    onPointerDown={(e) => {
+                      e.stopPropagation()
+                      e.preventDefault()
+
+                      const svg = e.currentTarget.ownerSVGElement
+                      if (!svg) return
+
+                      const cursorPt = clientToGraphPoint(svg, e.clientX, e.clientY)
+                      const cursorT = projectPointToSegmentT(cursorPt, p1, p2)
+                      if (cursorT === null) return
+
+                      e.currentTarget.setPointerCapture(e.pointerId)
+                      setDragging({
+                        c1: comp.criterion1,
+                        c2: comp.criterion2,
+                        pointerId: e.pointerId,
+                        offsetT: cursorT - t,
+                      })
+                      setSelectedPair([comp.criterion1, comp.criterion2])
+                    }}
+                  >
+                    <circle r={hitRadius} fill="transparent" />
+                    <circle
+                      r={visibleRadius}
+                      fill="#3b82f6"
+                      fillOpacity={isSelected ? 0.86 : 0.64}
+                      stroke="#ffffff"
+                      strokeOpacity={0.95}
+                      strokeWidth={1.1 / view.scale}
+                      className="cursor-grab active:cursor-grabbing hover:fill-opacity-90 transition-all duration-200"
+                      style={{ filter: 'drop-shadow(0 1px 2px rgba(15,23,42,0.16))' }}
+                    />
+                    {isSelected && <circle r={centerRadius} fill="white" className="pointer-events-none" />}
+                  </g>
+                )
+              })}
             </g>
             </g>
           </svg>
