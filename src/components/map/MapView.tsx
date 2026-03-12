@@ -250,6 +250,68 @@ export function MapView({ mcdaResults }: MapViewProps) {
     return new Intl.NumberFormat('en-GB', { maximumFractionDigits: 4 }).format(value)
   }, [])
 
+  const safeJsonParse = useCallback(<T,>(value: unknown): T | null => {
+    if (typeof value !== 'string') return null
+    try {
+      return JSON.parse(value) as T
+    } catch {
+      return null
+    }
+  }, [])
+
+  const buildChargepointPopupHtml = useCallback(
+    (props: Record<string, unknown>) => {
+      const address = safeJsonParse<Record<string, unknown>>(props.AddressInfo)
+      const connections = safeJsonParse<Array<Record<string, unknown>>>(props.Connections)
+
+      const locationParts = [
+        address?.Title,
+        address?.AddressLine1,
+        address?.Town,
+        address?.Postcode,
+      ].filter(Boolean)
+      const location = locationParts.length > 0 ? locationParts.join(', ') : 'N/A'
+
+      const operator = props.OperatorsReference ?? props.OperatorID ?? props.DataProvidersReference ?? 'Unknown'
+
+      const connectorSummary = Array.isArray(connections)
+        ? connections
+            .map((connection) => {
+              const power = Number(connection.PowerKW)
+              const quantity = Number(connection.Quantity)
+              const powerLabel = Number.isFinite(power) ? `${power.toFixed(1)} kW` : null
+              const qtyLabel = Number.isFinite(quantity) ? `x${quantity}` : null
+              return [powerLabel, qtyLabel].filter(Boolean).join(' ')
+            })
+            .filter((entry) => entry.length > 0)
+            .join(', ')
+        : ''
+
+      const statusId = Number(props.StatusTypeID)
+      const status = Number.isFinite(statusId)
+        ? statusId === 50
+          ? 'Operational'
+          : statusId === 0
+            ? 'Unknown'
+            : `Status ${statusId}`
+        : 'Unknown'
+
+      return `
+        <div class="p-2 min-w-[240px]">
+          <h3 class="text-sm font-bold border-b pb-1 mb-2">Existing Chargepoint</h3>
+          <div class="space-y-1 text-xs text-slate-700">
+            <p><strong>Operator:</strong> ${operator}</p>
+            <p><strong>Location:</strong> ${location}</p>
+            <p><strong>Connectors:</strong> ${connectorSummary || 'N/A'}</p>
+            <p><strong>Points:</strong> ${props.NumberOfPoints ?? 'N/A'}</p>
+            <p><strong>Status:</strong> ${status}</p>
+          </div>
+        </div>
+      `
+    },
+    [safeJsonParse]
+  )
+
   const buildTooltipHtml = useCallback(
     (
       h3Cell: string,
@@ -323,6 +385,27 @@ export function MapView({ mcdaResults }: MapViewProps) {
     }
     glyphMarkersRef.current = []
   }, [])
+
+  const applyLayerVisibility = useCallback((map: maplibregl.Map) => {
+    const polygonVisibility = showPolygonLayer ? 'visible' : 'none'
+    if (map.getLayer('h3-fill')) {
+      map.setLayoutProperty('h3-fill', 'visibility', polygonVisibility)
+      map.setPaintProperty('h3-fill', 'fill-opacity', polygonOpacity)
+    }
+    if (map.getLayer('h3-outline')) {
+      map.setLayoutProperty('h3-outline', 'visibility', polygonVisibility)
+    }
+
+    for (const overlay of PMTILES_OVERLAYS) {
+      if (map.getLayer(overlay.id)) {
+        map.setLayoutProperty(
+          overlay.id,
+          'visibility',
+          overlayVisibility[overlay.id] ? 'visible' : 'none'
+        )
+      }
+    }
+  }, [overlayVisibility, polygonOpacity, showPolygonLayer])
 
   const initMap = useCallback(() => {
     if (!mapContainer.current || mapRef.current) return
@@ -540,7 +623,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
 
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !map.isStyleLoaded()) return
+    if (!map || !isMapReady) return
 
     const filter: maplibregl.FilterSpecification = selectedPlacementCell
       ? ['==', ['get', 'h3_cell'], selectedPlacementCell]
@@ -681,6 +764,18 @@ export function MapView({ mcdaResults }: MapViewProps) {
     if (!map || !map.isStyleLoaded()) return
 
     const onMapClick = (e: maplibregl.MapMouseEvent) => {
+      const chargepointHits = map.queryRenderedFeatures(e.point, { layers: ['london-chargepoints'] })
+      if (chargepointHits.length > 0) {
+        const feature = chargepointHits[0]
+        const props = feature.properties || {}
+        const popupHtml = buildChargepointPopupHtml(props)
+        new maplibregl.Popup({ closeButton: true, className: 'chargepoint-popup' })
+          .setLngLat(e.lngLat)
+          .setHTML(popupHtml)
+          .addTo(map)
+        return
+      }
+
       if (isSimulationMode && selectedPlacementCell) {
         const hoveredPolygons = map.queryRenderedFeatures(e.point, { layers: ['h3-fill'] })
         if (hoveredPolygons.length === 0) {
@@ -700,34 +795,6 @@ export function MapView({ mcdaResults }: MapViewProps) {
 
     map.on('click', onMapClick)
 
-    const onChargepointClick = (e: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
-      if (!e.features || e.features.length === 0) return
-      
-      // Stop the click from propagating to the underlying MCDA polygon or map background
-      e.originalEvent.stopPropagation()
-
-      const feature = e.features[0]
-      const props = feature.properties || {}
-      
-      const popupHtml = `
-        <div class="p-2 min-w-[200px]">
-          <h3 class="text-sm font-bold border-b pb-1 mb-2">Existing Chargepoint</h3>
-          <div class="space-y-1 text-xs text-slate-700">
-            <p><strong>Operator:</strong> ${props.operator || 'Unknown'}</p>
-            <p><strong>Location:</strong> ${props.location_name || 'N/A'}</p>
-            <p><strong>Type:</strong> ${props.connector_types || 'N/A'}</p>
-            <p><strong>Status:</strong> ${props.status || 'Active'}</p>
-          </div>
-        </div>
-      `
-      
-      new maplibregl.Popup({ closeButton: true, className: 'chargepoint-popup' })
-        .setLngLat(e.lngLat)
-        .setHTML(popupHtml)
-        .addTo(map)
-    }
-
-    map.on('click', 'london-chargepoints', onChargepointClick)
     map.on('mouseenter', 'london-chargepoints', () => {
       map.getCanvas().style.cursor = 'pointer'
     })
@@ -737,9 +804,8 @@ export function MapView({ mcdaResults }: MapViewProps) {
 
     return () => {
       map.off('click', onMapClick)
-      map.off('click', 'london-chargepoints', onChargepointClick)
     }
-  }, [comparisonGlyph, isSimulationMode, selectedPlacementCell, setSelectedPlacementCell])
+  }, [buildChargepointPopupHtml, comparisonGlyph, isMapReady, isSimulationMode, selectedPlacementCell, setSelectedPlacementCell])
 
   // Update H3 grid when MCDA results change
   useEffect(() => {
@@ -780,44 +846,12 @@ export function MapView({ mcdaResults }: MapViewProps) {
     source.setData(geojson)
   }, [mcdaResults])
 
-  // Toggle polygon visibility.
+  // Sync polygon visibility, overlays, and opacity.
   useEffect(() => {
     const map = mapRef.current
     if (!map || !map.isStyleLoaded()) return
-
-    const visibility = showPolygonLayer ? 'visible' : 'none'
-    if (map.getLayer('h3-fill')) {
-      map.setLayoutProperty('h3-fill', 'visibility', visibility)
-    }
-    if (map.getLayer('h3-outline')) {
-      map.setLayoutProperty('h3-outline', 'visibility', visibility)
-    }
-  }, [showPolygonLayer])
-
-  // Toggle PMTiles overlay visibility.
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map || !map.isStyleLoaded()) return
-
-    for (const overlay of PMTILES_OVERLAYS) {
-      if (map.getLayer(overlay.id)) {
-        map.setLayoutProperty(
-          overlay.id,
-          'visibility',
-          overlayVisibility[overlay.id] ? 'visible' : 'none'
-        )
-      }
-    }
-  }, [overlayVisibility])
-
-  // Keep polygon opacity in sync with slider control.
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map || !map.isStyleLoaded()) return
-    if (!map.getLayer('h3-fill')) return
-
-    map.setPaintProperty('h3-fill', 'fill-opacity', polygonOpacity)
-  }, [polygonOpacity])
+    applyLayerVisibility(map)
+  }, [applyLayerVisibility])
 
   // Draw a glyph layer with criterion-level bars or rose petals as canvas markers.
   useEffect(() => {
@@ -1228,6 +1262,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
     if (!map) return
 
     const handleStyleData = () => {
+      applyLayerVisibility(map)
       syncEvcpMarkers(latestPlacementsRef.current)
     }
 
@@ -1235,7 +1270,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
     return () => {
       map.off('styledata', handleStyleData)
     }
-  }, [syncEvcpMarkers])
+  }, [applyLayerVisibility, syncEvcpMarkers])
 
   return (
     <div className="relative flex-1">
@@ -1356,12 +1391,12 @@ export function MapView({ mcdaResults }: MapViewProps) {
               <div className="text-[10px] text-slate-500 mb-1">Glyph type</div>
               <select
                 value={glyphType}
-                onChange={(e) => setGlyphType(e.target.value as 'bars' | 'rose')}
+                onChange={(e) => setGlyphType(e.target.value as 'rose' | 'bars')}
                 className="w-full text-xs rounded-md border border-slate-300 bg-white px-2 py-1"
                 disabled={!showGlyphLayer}
               >
                 <option value="bars">Bar chart</option>
-                <option value="rose">Rose chart (petal length)</option>
+                <option value="rose">Rose chart</option>
               </select>
             </div>
 
