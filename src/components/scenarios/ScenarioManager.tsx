@@ -19,6 +19,7 @@ export function ScenarioManager() {
   const criteria = useMCDAStore((s) => s.criteria)
   const method = useMCDAStore((s) => s.method)
   const setWeights = useMCDAStore((s) => s.setWeights)
+  const setPolarities = useMCDAStore((s) => s.setPolarities)
   const setMethod = useMCDAStore((s) => s.setMethod)
 
   useEffect(() => {
@@ -28,8 +29,12 @@ export function ScenarioManager() {
   function handleSave() {
     if (!scenarioName.trim()) return
     const weights: Record<string, number> = {}
-    criteria.forEach((c) => { weights[c.id] = c.weight })
-    saveScenario(scenarioName, weights, method)
+    const polarities: Record<string, (typeof criteria)[number]['polarity']> = {}
+    criteria.forEach((c) => {
+      weights[c.id] = c.weight
+      polarities[c.id] = c.polarity
+    })
+    saveScenario(scenarioName, weights, method, polarities)
     setScenarioName('')
     setShowSaveForm(false)
   }
@@ -38,6 +43,9 @@ export function ScenarioManager() {
     const scenario = scenarios.find((s) => s.id === scenarioId)
     if (!scenario) return
     setWeights(scenario.weights)
+    if (scenario.polarities) {
+      setPolarities(scenario.polarities)
+    }
     setMethod(scenario.method)
     setActiveScenario(scenario.id)
   }

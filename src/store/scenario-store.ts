@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Scenario, EVCPPlacement, ChargerType, ImpactEstimate } from '@/analysis/types'
+import type { Scenario, EVCPPlacement, ChargerType, CriterionPolarity, ImpactEstimate } from '@/analysis/types'
 
 const STORAGE_KEY = 'va-mcda-evcp-scenarios'
 
@@ -15,7 +15,12 @@ interface ScenarioState {
   clearPlacements: () => void
   setCurrentImpact: (impact: ImpactEstimate | null) => void
 
-  saveScenario: (name: string, weights: Record<string, number>, method: string) => void
+  saveScenario: (
+    name: string,
+    weights: Record<string, number>,
+    method: string,
+    polarities?: Record<string, CriterionPolarity>
+  ) => void
   deleteScenario: (id: string) => void
   loadScenario: (id: string) => Scenario | null
   setActiveScenario: (id: string | null) => void
@@ -66,12 +71,13 @@ export const useScenarioStore = create<ScenarioState>((set, get) => ({
 
   setCurrentImpact: (impact) => set({ currentImpact: impact }),
 
-  saveScenario: (name, weights, method) => {
+  saveScenario: (name, weights, method, polarities) => {
     const scenario: Scenario = {
       id: generateId(),
       name,
       timestamp: Date.now(),
       weights,
+      polarities,
       method: method as Scenario['method'],
       placements: [...get().currentPlacements],
       impactSummary: get().currentImpact ?? undefined,

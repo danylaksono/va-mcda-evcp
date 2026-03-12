@@ -1,5 +1,12 @@
 import type { Criterion, MCDAMethod } from './types'
 
+function orientedFieldExpression(criterion: Criterion): string {
+  if (criterion.polarity === 'cost') {
+    return `(1 - ${criterion.normalizedField})`
+  }
+  return criterion.normalizedField
+}
+
 /**
  * Builds a SQL query for weighted sum model (WSM) scoring.
  * Score = Σ(wi × Si) for all active criteria
@@ -8,7 +15,7 @@ export function buildWSMQuery(criteria: Criterion[]): string {
   const active = criteria.filter((c) => c.active)
   if (active.length === 0) return 'SELECT h3_cell, 0.0 AS mcda_score FROM mcda_base LIMIT 0'
 
-  const terms = active.map((c) => `(${c.weight} * ${c.normalizedField})`).join(' +\n    ')
+  const terms = active.map((c) => `(${c.weight} * ${orientedFieldExpression(c)})`).join(' +\n    ')
 
   return `
 SELECT
@@ -27,7 +34,7 @@ export function buildWPMQuery(criteria: Criterion[]): string {
   if (active.length === 0) return 'SELECT h3_cell, 0.0 AS mcda_score FROM mcda_base LIMIT 0'
 
   const terms = active
-    .map((c) => `POWER(GREATEST(${c.normalizedField}, 0.001), ${c.weight})`)
+    .map((c) => `POWER(GREATEST(${orientedFieldExpression(c)}, 0.001), ${c.weight})`)
     .join(' *\n    ')
 
   return `
@@ -47,7 +54,7 @@ export function buildTOPSISQuery(criteria: Criterion[]): string {
   if (active.length === 0) return 'SELECT h3_cell, 0.0 AS mcda_score FROM mcda_base LIMIT 0'
 
   const weightedCols = active
-    .map((c) => `(${c.weight} * ${c.normalizedField}) AS w_${c.id}`)
+    .map((c) => `(${c.weight} * ${orientedFieldExpression(c)}) AS w_${c.id}`)
     .join(',\n    ')
 
   const pisTerms = active.map((c) => `MAX(w_${c.id}) AS pis_${c.id}`).join(', ')

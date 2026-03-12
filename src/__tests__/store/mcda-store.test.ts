@@ -36,6 +36,15 @@ it('initializes with equal default weights', () => {
     expect(criterion!.active).toBe(false)
   })
 
+  it('sets criterion polarity', () => {
+    useMCDAStore.getState().setPolarity('pop_density', 'cost')
+
+    const state = useMCDAStore.getState()
+    const criterion = state.criteria.find((c) => c.id === 'pop_density')
+
+    expect(criterion!.polarity).toBe('cost')
+  })
+
   it('manages comparisons', () => {
     const store = useMCDAStore.getState()
 
@@ -62,6 +71,7 @@ it('initializes with equal default weights', () => {
 
   it('resets weights to default', () => {
     useMCDAStore.getState().setWeight('pop_density', 0.8)
+    useMCDAStore.getState().setPolarity('pop_density', 'cost')
     useMCDAStore.getState().resetWeights()
 
     const state = useMCDAStore.getState()
@@ -71,5 +81,10 @@ it('initializes with equal default weights', () => {
       expect(c.weight).toBeCloseTo(expectedWeight, 5)
       expect(c.active).toBe(true)
     })
+
+    const popDensity = state.criteria.find((c) => c.id === 'pop_density')
+    const transportEmission = state.criteria.find((c) => c.id === 'transport_emission')
+    expect(popDensity!.polarity).toBe('benefit')
+    expect(transportEmission!.polarity).toBe('cost')
   })
 })

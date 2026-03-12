@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Criterion, MCDAMethod, AHPComparison, AHPMetrics } from '@/analysis/types'
+import type { Criterion, CriterionPolarity, MCDAMethod, AHPComparison, AHPMetrics } from '@/analysis/types'
 import { CRITERIA_CONFIG } from '@/analysis/types'
 import { adjustWeight, normalizeWeights } from '@/analysis/mcda-engine'
 import { solveAHP } from '@/analysis/ahp-solver'
@@ -15,6 +15,8 @@ interface MCDAState {
   setMethod: (method: MCDAMethod) => void
   setWeight: (criterionId: string, weight: number) => void
   setWeights: (weights: Record<string, number>) => void
+  setPolarity: (criterionId: string, polarity: CriterionPolarity) => void
+  setPolarities: (polarities: Record<string, CriterionPolarity>) => void
   toggleCriterion: (criterionId: string) => void
   addComparison: (comparison: AHPComparison) => void
   removeComparison: (criterion1: string, criterion2: string) => void
@@ -45,6 +47,21 @@ export const useMCDAStore = create<MCDAState>((set, get) => ({
     const updated = get().criteria.map((c) => ({
       ...c,
       weight: weights[c.id] ?? c.weight,
+    }))
+    set({ criteria: updated, ahpMetrics: null })
+  },
+
+  setPolarity: (criterionId, polarity) => {
+    const updated = get().criteria.map((c) =>
+      c.id === criterionId ? { ...c, polarity } : c
+    )
+    set({ criteria: updated, ahpMetrics: null })
+  },
+
+  setPolarities: (polarities) => {
+    const updated = get().criteria.map((c) => ({
+      ...c,
+      polarity: polarities[c.id] ?? c.polarity,
     }))
     set({ criteria: updated, ahpMetrics: null })
   },

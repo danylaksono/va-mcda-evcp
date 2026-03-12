@@ -4,6 +4,7 @@ export interface Criterion {
   field: string
   normalizedField: string
   weight: number
+  polarity: CriterionPolarity
   active: boolean
   color: string
   category: CriterionCategory
@@ -11,6 +12,7 @@ export interface Criterion {
 }
 
 export type CriterionCategory = 'demand' | 'equity' | 'accessibility' | 'environment' | 'infrastructure' | 'coverage'
+export type CriterionPolarity = 'benefit' | 'cost'
 
 export type MCDAMethod = 'WSM' | 'WPM' | 'TOPSIS'
 
@@ -68,6 +70,7 @@ export interface Scenario {
   name: string
   timestamp: number
   weights: Record<string, number>
+  polarities?: Record<string, CriterionPolarity>
   method: MCDAMethod
   placements: EVCPPlacement[]
   impactSummary?: ImpactEstimate
@@ -80,6 +83,7 @@ export const CRITERIA_CONFIG: Criterion[] = [
     field: 'pop_density',
     normalizedField: 'pop_density_normalized',
     weight: 0.5,
+    polarity: 'benefit',
     active: true,
     color: '#3b82f6',
     category: 'demand',
@@ -91,6 +95,7 @@ export const CRITERIA_CONFIG: Criterion[] = [
     field: 'one_or_more',
     normalizedField: 'one_or_more_normalized',
     weight: 0.5,
+    polarity: 'benefit',
     active: true,
     color: '#10b981',
     category: 'demand',
@@ -102,6 +107,7 @@ export const CRITERIA_CONFIG: Criterion[] = [
     field: 'two_or_more',
     normalizedField: 'two_or_more_normalized',
     weight: 0.5,
+    polarity: 'benefit',
     active: true,
     color: '#f59e0b',
     category: 'equity',
@@ -113,6 +119,7 @@ export const CRITERIA_CONFIG: Criterion[] = [
     field: 'employment_30',
     normalizedField: 'employment_30_normalized',
     weight: 0.5,
+    polarity: 'benefit',
     active: true,
     color: '#8b5cf6',
     category: 'accessibility',
@@ -124,6 +131,7 @@ export const CRITERIA_CONFIG: Criterion[] = [
     field: 'supermarket_30',
     normalizedField: 'supermarket_30_normalized',
     weight: 0.5,
+    polarity: 'benefit',
     active: true,
     color: '#06b6d4',
     category: 'accessibility',
@@ -135,6 +143,7 @@ export const CRITERIA_CONFIG: Criterion[] = [
     field: 'road_2025',
     normalizedField: 'road_2025_normalized',
     weight: 0.5,
+    polarity: 'cost',
     active: true,
     color: '#ef4444',
     category: 'environment',
@@ -146,6 +155,7 @@ export const CRITERIA_CONFIG: Criterion[] = [
     field: 'normalised_capacity',
     normalizedField: 'normalised_capacity_normalized',
     weight: 0.5,
+    polarity: 'benefit',
     active: true,
     color: '#f97316',
     category: 'infrastructure',
@@ -157,6 +167,7 @@ export const CRITERIA_CONFIG: Criterion[] = [
     field: 'motorized_traffic_index',
     normalizedField: 'motorized_traffic_index_normalized',
     weight: 0.5,
+    polarity: 'benefit',
     active: true,
     color: '#ec4899',
     category: 'demand',
@@ -168,6 +179,7 @@ export const CRITERIA_CONFIG: Criterion[] = [
     field: 'time_limit',
     normalizedField: 'time_limit_normalized',
     weight: 0.5,
+    polarity: 'cost',
     active: true,
     color: '#14b8a6',
     category: 'coverage',

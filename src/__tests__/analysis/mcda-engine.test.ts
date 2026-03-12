@@ -57,6 +57,13 @@ describe('MCDA Engine', () => {
 
       expect(sql).toContain('0.5')
     })
+
+    it('inverts cost-oriented criteria in SQL terms', () => {
+      const sql = buildWSMQuery(makeCriteria())
+
+      expect(sql).toContain('(1 - road_2025_normalized)')
+      expect(sql).toContain('(1 - time_limit_normalized)')
+    })
   })
 
   describe('buildWPMQuery', () => {

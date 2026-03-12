@@ -3,7 +3,7 @@ import * as d3 from 'd3'
 import { ArrowLeftRight, BookmarkPlus, RefreshCcw, SlidersHorizontal, Target } from 'lucide-react'
 import { useMCDAStore } from '@/store/mcda-store'
 import { useScenarioStore } from '@/store/scenario-store'
-import type { MCDAMethod } from '@/analysis/types'
+import type { CriterionPolarity, MCDAMethod } from '@/analysis/types'
 
 const CHART_TOP = 28
 const CHART_BOTTOM = 18
@@ -46,6 +46,8 @@ export function ParallelCoordinates() {
   const setMethod = useMCDAStore((s) => s.setMethod)
   const setWeight = useMCDAStore((s) => s.setWeight)
   const setWeights = useMCDAStore((s) => s.setWeights)
+  const setPolarity = useMCDAStore((s) => s.setPolarity)
+  const setPolarities = useMCDAStore((s) => s.setPolarities)
   const toggleCriterion = useMCDAStore((s) => s.toggleCriterion)
   const resetWeights = useMCDAStore((s) => s.resetWeights)
 
@@ -110,19 +112,25 @@ export function ParallelCoordinates() {
   )
 
   const equationText = useMemo(() => {
-    const symbols = normalizedActiveWeights.map((criterion, idx) => `w${idx + 1}`)
+    const orientedTerms = normalizedActiveWeights.map((criterion, idx) => {
+      const scoreSymbol = `s${idx + 1}`
+      const orientedScore = criterion.polarity === 'cost' ? `(1-${scoreSymbol})` : scoreSymbol
+      return { weightSymbol: `w${idx + 1}`, orientedScore }
+    })
 
     if (method === 'WPM') {
-      return symbols.length > 0 ? `Score = Π(s_i^w_i),  w = [${symbols.join(', ')}]` : 'Score = Π(s_i^w_i)'
+      const product = orientedTerms.map((term) => `${term.orientedScore}^${term.weightSymbol}`).join(' · ')
+      return product.length > 0 ? `Score = ${product}` : 'Score = Π(s_i^w_i)'
     }
 
     if (method === 'TOPSIS') {
-      return symbols.length > 0
-        ? `Score = D- / (D+ + D-),  w = [${symbols.join(', ')}]`
+      return orientedTerms.length > 0
+        ? 'Score = D- / (D+ + D-), with v_i = w_i · oriented(s_i)'
         : 'Score = D- / (D+ + D-)'
     }
 
-    return symbols.length > 0 ? `Score = Σ(w_i · s_i),  w = [${symbols.join(', ')}]` : 'Score = Σ(w_i · s_i)'
+    const sumTerms = orientedTerms.map((term) => `${term.weightSymbol}·${term.orientedScore}`).join(' + ')
+    return sumTerms.length > 0 ? `Score = ${sumTerms}` : 'Score = Σ(w_i · s_i)'
   }, [method, normalizedActiveWeights])
 
   const lineGenerator = useMemo(
@@ -204,12 +212,14 @@ export function ParallelCoordinates() {
   function handleSaveScenario() {
     const name = scenarioName.trim() || `Scenario ${scenarios.length + 1}`
     const weights: Record<string, number> = {}
+    const polarities: Record<string, CriterionPolarity> = {}
 
     criteria.forEach((criterion) => {
       weights[criterion.id] = criterion.weight
+      polarities[criterion.id] = criterion.polarity
     })
 
-    saveScenario(name, weights, method)
+    saveScenario(name, weights, method, polarities)
     setScenarioName('')
     setShowSaveForm(false)
   }
@@ -219,8 +229,15 @@ export function ParallelCoordinates() {
     if (!scenario) return
 
     setWeights(scenario.weights)
+    if (scenario.polarities) {
+      setPolarities(scenario.polarities)
+    }
     setMethod(scenario.method)
     setActiveScenario(scenario.id)
+  }
+
+  function togglePolarity(criterionId: string, polarity: CriterionPolarity) {
+    setPolarity(criterionId, polarity === 'benefit' ? 'cost' : 'benefit')
   }
 
   return (
@@ -319,6 +336,7 @@ export function ParallelCoordinates() {
                 const y = index * rowHeight + rowHeight / 2
                 const compareWeight = compareScenario?.weights[criterion.id] ?? null
                 const delta = compareWeight === null ? null : criterion.weight - compareWeight
+                const labelX = -leftGutter + 30
 
                 return (
                   <g key={criterion.id} transform={`translate(0, ${y})`} className={`transition-opacity duration-300 ${!criterion.active ? 'opacity-30' : ''}`}>
@@ -389,11 +407,37 @@ export function ParallelCoordinates() {
 
                     <g className="cursor-pointer" onClick={() => toggleCriterion(criterion.id)}>
                       <circle cx={-leftGutter + 14} cy={-1} r={8} fill={criterion.active ? criterion.color : '#cbd5e1'} />
-                      <text x={-leftGutter + 30} y={-3} className="fill-slate-700 text-[12px] font-semibold">
+                      <text x={labelX} y={-3} className="fill-slate-700 text-[12px] font-semibold">
                         {criterion.name}
                       </text>
-                      <text x={-leftGutter + 30} y={13} className="fill-slate-400 text-[10px] uppercase tracking-[0.14em]">
+                      <text x={labelX} y={13} className="fill-slate-400 text-[10px] uppercase tracking-[0.14em]">
                         {criterion.category}
+                      </text>
+                    </g>
+
+                    <g
+                      className="cursor-pointer"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        togglePolarity(criterion.id, criterion.polarity)
+                      }}
+                    >
+                      <rect
+                          x={labelX}
+                          y={18}
+                          width={38}
+                          height={14}
+                          rx={7}
+                        fill={criterion.polarity === 'benefit' ? '#dcfce7' : '#fee2e2'}
+                        stroke={criterion.polarity === 'benefit' ? '#86efac' : '#fecaca'}
+                      />
+                      <text
+                          x={labelX + 19}
+                          y={28}
+                          textAnchor="middle"
+                        className={`text-[8px] font-bold uppercase tracking-[0.06em] ${criterion.polarity === 'benefit' ? 'fill-emerald-700' : 'fill-rose-700'}`}
+                      >
+                        {criterion.polarity === 'benefit' ? 'Ben' : 'Cost'}
                       </text>
                     </g>
 
@@ -490,9 +534,16 @@ export function ParallelCoordinates() {
                     <span className="h-2 w-2 rounded-full" style={{ backgroundColor: criterion.color }} />
                     <span className="truncate font-semibold">w{index + 1}: {criterion.name}</span>
                   </div>
-                  <span className="font-mono font-bold text-slate-700">
-                    {(criterion.normalizedWeight * 100).toFixed(1)}%
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.08em] ${criterion.polarity === 'benefit' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}
+                    >
+                      {criterion.polarity === 'benefit' ? 'Ben' : 'Cost'}
+                    </span>
+                    <span className="font-mono font-bold text-slate-700">
+                      {(criterion.normalizedWeight * 100).toFixed(1)}%
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>
