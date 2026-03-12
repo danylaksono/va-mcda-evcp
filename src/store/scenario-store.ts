@@ -8,12 +8,18 @@ interface ScenarioState {
   activeScenarioId: string | null
   currentPlacements: EVCPPlacement[]
   currentImpact: ImpactEstimate | null
+  isSimulationMode: boolean
+  selectedPlacementCell: string | null
 
   addPlacement: (h3Cell: string, chargerType: ChargerType, chargerCount: number) => void
   removePlacement: (h3Cell: string) => void
   updatePlacement: (h3Cell: string, chargerType: ChargerType, chargerCount: number) => void
+  setPlacements: (placements: EVCPPlacement[]) => void
   clearPlacements: () => void
   setCurrentImpact: (impact: ImpactEstimate | null) => void
+  setSimulationMode: (active: boolean) => void
+  setSelectedPlacementCell: (cell: string | null) => void
+  resetWorkingScenario: () => void
 
   saveScenario: (
     name: string,
@@ -38,6 +44,8 @@ export const useScenarioStore = create<ScenarioState>((set, get) => ({
   activeScenarioId: null,
   currentPlacements: [],
   currentImpact: null,
+  isSimulationMode: false,
+  selectedPlacementCell: null,
 
   addPlacement: (h3Cell, chargerType, chargerCount) => {
     const existing = get().currentPlacements.find((p) => p.h3Cell === h3Cell)
@@ -67,9 +75,32 @@ export const useScenarioStore = create<ScenarioState>((set, get) => ({
     })
   },
 
-  clearPlacements: () => set({ currentPlacements: [], currentImpact: null }),
+  setPlacements: (placements) => {
+    set({
+      currentPlacements: placements.map((placement) => ({
+        ...placement,
+        timestamp: placement.timestamp ?? Date.now(),
+      })),
+      currentImpact: null,
+    })
+  },
+
+  clearPlacements: () => set({ currentPlacements: [], currentImpact: null, selectedPlacementCell: null }),
 
   setCurrentImpact: (impact) => set({ currentImpact: impact }),
+
+  setSimulationMode: (active) => set({ isSimulationMode: active }),
+
+  setSelectedPlacementCell: (cell) => set({ selectedPlacementCell: cell }),
+
+  resetWorkingScenario: () =>
+    set({
+      activeScenarioId: null,
+      currentPlacements: [],
+      currentImpact: null,
+      isSimulationMode: false,
+      selectedPlacementCell: null,
+    }),
 
   saveScenario: (name, weights, method, polarities) => {
     const scenario: Scenario = {

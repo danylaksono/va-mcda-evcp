@@ -8,6 +8,8 @@ import { useScenarioStore } from '@/store/scenario-store'
 import { h3ScoresToGeoJSON, getH3Center } from '@/utils/h3-utils'
 import { scoreToColor } from '@/utils/color-scales'
 import { ChargerConfig } from '../impact/ChargerConfig'
+import { Zap } from 'lucide-react'
+import type { EVCPPlacement } from '@/analysis/types'
 
 interface MapViewProps {
   mcdaResults: Array<{
@@ -27,8 +29,15 @@ interface GlyphDatum {
   lng: number
 }
 
+interface ClickLocation {
+  lat: number
+  lng: number
+}
+
 const LONDON_CENTER: [number, number] = [-0.1276, 51.5074]
 const BASEMAP_STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
+const EVCP_CURSOR_SVG = `<svg xmlns='http://www.w3.org/2000/svg' width='34' height='34' viewBox='0 0 34 34'><path fill='%23dc2626' d='M17 33s10-11.2 10-18A10 10 0 1 0 7 15c0 6.8 10 18 10 18Z'/><circle cx='17' cy='14.5' r='6.3' fill='%23fff'/><path fill='%230f172a' d='M18 10h-2.2l-.8 4h2.1l-.8 4 3.7-5h-2.1z'/></svg>`
+const EVCP_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(EVCP_CURSOR_SVG)}") 17 31, crosshair`
 
 export function MapView({ mcdaResults }: MapViewProps) {
   const mapContainer = useRef<HTMLDivElement>(null)
@@ -36,14 +45,18 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const tooltipRef = useRef<maplibregl.Popup | null>(null)
   const glyphTooltipActiveRef = useRef(false)
   const glyphMarkersRef = useRef<maplibregl.Marker[]>([])
+  const latestPlacementsRef = useRef<EVCPPlacement[]>([])
+  const isSimulationModeRef = useRef(false)
   const [showChargerConfig, setShowChargerConfig] = useState(false)
   const [showPolygonLayer, setShowPolygonLayer] = useState(true)
+  const [polygonOpacity, setPolygonOpacity] = useState(0.65)
   const [showGlyphLayer, setShowGlyphLayer] = useState(false)
   const [showTooltips, setShowTooltips] = useState(true)
   const [glyphType, setGlyphType] = useState<'bars' | 'rose'>('bars')
   const [glyphAggregation, setGlyphAggregation] = useState<'auto' | 6 | 7 | 8 | 9 | 10>(7)
   const [glyphSizeScale, setGlyphSizeScale] = useState(1)
   const [comparisonGlyph, setComparisonGlyph] = useState<GlyphDatum | null>(null)
+  const [selectedClickLocation, setSelectedClickLocation] = useState<ClickLocation | null>(null)
 
   const setMapReady = useMapStore((s) => s.setMapReady)
   const isMapReady = useMapStore((s) => s.isMapReady)
@@ -53,6 +66,10 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const criteria = useMCDAStore((s) => s.criteria)
 
   const currentPlacements = useScenarioStore((s) => s.currentPlacements)
+  const isSimulationMode = useScenarioStore((s) => s.isSimulationMode)
+  const setSimulationMode = useScenarioStore((s) => s.setSimulationMode)
+  const selectedPlacementCell = useScenarioStore((s) => s.selectedPlacementCell)
+  const setSelectedPlacementCell = useScenarioStore((s) => s.setSelectedPlacementCell)
 
   const glyphLegendCriteria = useMemo(() => {
     const maxItems = glyphType === 'rose' ? 8 : 6
@@ -172,7 +189,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
       maxZoom: 16,
     })
 
-    map.addControl(new maplibregl.NavigationControl(), 'top-right')
+    map.addControl(new maplibregl.NavigationControl(), 'top-left')
     map.addControl(
       new maplibregl.ScaleControl({ maxWidth: 150 }),
       'bottom-left'
@@ -195,6 +212,17 @@ export function MapView({ mcdaResults }: MapViewProps) {
       })
 
       map.addLayer({
+        id: 'h3-placement-selection-fill',
+        type: 'fill',
+        source: 'h3-grid',
+        filter: ['==', ['get', 'h3_cell'], ''],
+        paint: {
+          'fill-color': '#f97316',
+          'fill-opacity': 0.2,
+        },
+      })
+
+      map.addLayer({
         id: 'h3-outline',
         type: 'line',
         source: 'h3-grid',
@@ -202,6 +230,18 @@ export function MapView({ mcdaResults }: MapViewProps) {
           'line-color': '#ffffff',
           'line-width': 0.5,
           'line-opacity': 0.4,
+        },
+      })
+
+      map.addLayer({
+        id: 'h3-placement-selection-outline',
+        type: 'line',
+        source: 'h3-grid',
+        filter: ['==', ['get', 'h3_cell'], ''],
+        paint: {
+          'line-color': '#ea580c',
+          'line-width': 2,
+          'line-opacity': 0.95,
         },
       })
 
@@ -215,10 +255,54 @@ export function MapView({ mcdaResults }: MapViewProps) {
         type: 'circle',
         source: 'evcp-markers',
         paint: {
-          'circle-radius': 8,
+          'circle-radius': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            9,
+            7,
+            12,
+            9,
+            15,
+            11,
+          ],
           'circle-color': '#ef4444',
           'circle-stroke-width': 2,
           'circle-stroke-color': '#ffffff',
+        },
+      })
+
+      map.addLayer({
+        id: 'evcp-marker-count',
+        type: 'symbol',
+        source: 'evcp-markers',
+        layout: {
+          'text-field': [
+            'case',
+            ['>', ['to-number', ['get', 'charger_count']], 1],
+            ['to-string', ['get', 'charger_count']],
+            '',
+          ],
+          'text-size': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            9,
+            9,
+            12,
+            10,
+            15,
+            11,
+          ],
+          'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+          'text-anchor': 'center',
+          'text-allow-overlap': true,
+          'text-ignore-placement': true,
+        },
+        paint: {
+          'text-color': '#ffffff',
+          'text-halo-color': '#991b1b',
+          'text-halo-width': 1,
         },
       })
 
@@ -226,18 +310,21 @@ export function MapView({ mcdaResults }: MapViewProps) {
     })
 
     map.on('click', 'h3-fill', (e) => {
+      if (!isSimulationModeRef.current) return
       if (e.features && e.features.length > 0) {
         const cell = e.features[0].properties?.h3_cell as string
         selectH3Cell(cell)
+        setSelectedClickLocation({ lat: e.lngLat.lat, lng: e.lngLat.lng })
+        setSelectedPlacementCell(cell)
         setShowChargerConfig(true)
       }
     })
 
     map.on('mouseenter', 'h3-fill', () => {
-      map.getCanvas().style.cursor = 'pointer'
+      map.getCanvas().style.cursor = isSimulationModeRef.current ? EVCP_CURSOR : 'pointer'
     })
     map.on('mouseleave', 'h3-fill', () => {
-      map.getCanvas().style.cursor = ''
+      map.getCanvas().style.cursor = isSimulationModeRef.current ? EVCP_CURSOR : ''
     })
 
     map.on('zoomend', () => {
@@ -245,7 +332,37 @@ export function MapView({ mcdaResults }: MapViewProps) {
     })
 
     mapRef.current = map
-  }, [setMapReady, selectH3Cell, setZoom])
+  }, [setMapReady, selectH3Cell, setSelectedPlacementCell, setZoom])
+
+  useEffect(() => {
+    isSimulationModeRef.current = isSimulationMode
+    const map = mapRef.current
+    if (!map) return
+    map.getCanvas().style.cursor = isSimulationMode ? EVCP_CURSOR : ''
+  }, [isSimulationMode])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded()) return
+
+    const filter: maplibregl.FilterSpecification = selectedPlacementCell
+      ? ['==', ['get', 'h3_cell'], selectedPlacementCell]
+      : ['==', ['get', 'h3_cell'], '']
+
+    if (map.getLayer('h3-placement-selection-fill')) {
+      map.setFilter('h3-placement-selection-fill', filter)
+    }
+    if (map.getLayer('h3-placement-selection-outline')) {
+      map.setFilter('h3-placement-selection-outline', filter)
+    }
+  }, [selectedPlacementCell])
+
+  useEffect(() => {
+    if (selectedPlacementCell) return
+    setShowChargerConfig(false)
+    setSelectedClickLocation(null)
+    selectH3Cell(null)
+  }, [selectedPlacementCell, selectH3Cell])
 
   useEffect(() => {
     if (!showTooltips) {
@@ -253,6 +370,10 @@ export function MapView({ mcdaResults }: MapViewProps) {
       tooltipRef.current?.remove()
     }
   }, [showTooltips])
+
+  useEffect(() => {
+    latestPlacementsRef.current = currentPlacements
+  }, [currentPlacements])
 
   useEffect(() => {
     const map = mapRef.current
@@ -359,6 +480,14 @@ export function MapView({ mcdaResults }: MapViewProps) {
     if (!map || !map.isStyleLoaded()) return
 
     const onMapClick = (e: maplibregl.MapMouseEvent) => {
+      if (isSimulationMode && selectedPlacementCell) {
+        const hoveredPolygons = map.queryRenderedFeatures(e.point, { layers: ['h3-fill'] })
+        if (hoveredPolygons.length === 0) {
+          setSelectedPlacementCell(null)
+          setShowChargerConfig(false)
+        }
+      }
+
       if (!comparisonGlyph) return
       const hoveredPolygons = map.queryRenderedFeatures(e.point, { layers: ['h3-fill'] })
       if (hoveredPolygons.length === 0) {
@@ -372,7 +501,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
     return () => {
       map.off('click', onMapClick)
     }
-  }, [comparisonGlyph])
+  }, [comparisonGlyph, isSimulationMode, selectedPlacementCell, setSelectedPlacementCell])
 
   // Update H3 grid when MCDA results change
   useEffect(() => {
@@ -426,6 +555,15 @@ export function MapView({ mcdaResults }: MapViewProps) {
       map.setLayoutProperty('h3-outline', 'visibility', visibility)
     }
   }, [showPolygonLayer])
+
+  // Keep polygon opacity in sync with slider control.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded()) return
+    if (!map.getLayer('h3-fill')) return
+
+    map.setPaintProperty('h3-fill', 'fill-opacity', polygonOpacity)
+  }, [polygonOpacity])
 
   // Draw a glyph layer with criterion-level bars or rose petals as canvas markers.
   useEffect(() => {
@@ -795,33 +933,83 @@ export function MapView({ mcdaResults }: MapViewProps) {
     }
   }, [mcdaResults, criteria, showGlyphLayer, showTooltips, glyphAggregation, glyphType, glyphSizeScale, comparisonGlyph, clearGlyphMarkers, buildTooltipHtml, getTooltipPopup])
 
-  // Update EVCP markers
-  useEffect(() => {
+  const syncEvcpMarkers = useCallback((placements: typeof currentPlacements) => {
     const map = mapRef.current
-    if (!map || !map.isStyleLoaded()) return
+    if (!map) return
 
-    const source = map.getSource('evcp-markers') as maplibregl.GeoJSONSource
+    const source = map.getSource('evcp-markers') as maplibregl.GeoJSONSource | undefined
     if (!source) return
 
-    const features = currentPlacements.map((p) => {
-      const [lat, lng] = getH3Center(p.h3Cell)
-      return {
-        type: 'Feature' as const,
-        geometry: { type: 'Point' as const, coordinates: [lng, lat] },
-        properties: {
-          h3_cell: p.h3Cell,
-          charger_type: p.chargerType,
-          charger_count: p.chargerCount,
-        },
+    const features = placements.flatMap((p) => {
+      try {
+        const [lat, lng] = getH3Center(p.h3Cell)
+        return [
+          {
+            type: 'Feature' as const,
+            geometry: { type: 'Point' as const, coordinates: [lng, lat] },
+            properties: {
+              h3_cell: p.h3Cell,
+              charger_type: p.chargerType,
+              charger_count: p.chargerCount,
+            },
+          },
+        ]
+      } catch {
+        return []
       }
     })
 
     source.setData({ type: 'FeatureCollection', features })
-  }, [currentPlacements])
+  }, [])
+
+  // Update EVCP markers when placements change and when map becomes ready.
+  useEffect(() => {
+    if (!isMapReady) return
+    syncEvcpMarkers(currentPlacements)
+  }, [currentPlacements, isMapReady, syncEvcpMarkers])
+
+  // Re-apply marker data if the style reloads to avoid losing source data visibility.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+
+    const handleStyleData = () => {
+      syncEvcpMarkers(latestPlacementsRef.current)
+    }
+
+    map.on('styledata', handleStyleData)
+    return () => {
+      map.off('styledata', handleStyleData)
+    }
+  }, [syncEvcpMarkers])
 
   return (
     <div className="relative flex-1">
       <div ref={mapContainer} className="w-full h-full" />
+
+      <div className="absolute top-24 left-3 z-10">
+        <button
+          onClick={() => {
+            const next = !isSimulationMode
+            setSimulationMode(next)
+            if (!next) {
+              setShowChargerConfig(false)
+              setSelectedClickLocation(null)
+              setSelectedPlacementCell(null)
+              selectH3Cell(null)
+            }
+          }}
+          className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold shadow-lg transition-colors ${
+            isSimulationMode
+              ? 'bg-amber-500 text-white border-amber-600'
+              : 'bg-white/95 text-slate-700 border-slate-300 hover:bg-slate-50'
+          }`}
+          title="Toggle EVCP placement mode"
+        >
+          <Zap className="h-3.5 w-3.5" strokeWidth={2.5} />
+          {isSimulationMode ? 'Simulation: ON' : 'Simulate EVCP Placement'}
+        </button>
+      </div>
 
       {/* Layer Controls */}
       <div className="absolute top-4 right-4 bg-white/95 backdrop-blur-sm rounded-lg shadow-lg p-3 border border-slate-200 min-w-[220px] z-10">
@@ -836,8 +1024,26 @@ export function MapView({ mcdaResults }: MapViewProps) {
             onChange={(e) => setShowPolygonLayer(e.target.checked)}
             className="rounded border-slate-300"
           />
-          MCDA H3 polygons
+          MCDA Final Score
         </label>
+
+        <div className="mb-2">
+          <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
+            <span>Polygon opacity</span>
+            <span className="font-mono text-slate-600">{Math.round(polygonOpacity * 100)}%</span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={Math.round(polygonOpacity * 100)}
+            onChange={(e) => setPolygonOpacity(Number(e.target.value) / 100)}
+            disabled={!showPolygonLayer}
+            className="w-full accent-slate-700"
+            aria-label="MCDA polygon opacity"
+          />
+        </div>
 
         <label className="flex items-center gap-2 text-xs text-slate-700 mb-2 cursor-pointer">
           <input
@@ -846,7 +1052,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
             onChange={(e) => setShowGlyphLayer(e.target.checked)}
             className="rounded border-slate-300"
           />
-          Glyph bar charts
+          Glyph layer
         </label>
 
         <label className="flex items-center gap-2 text-xs text-slate-700 mb-2 cursor-pointer">
@@ -976,8 +1182,14 @@ export function MapView({ mcdaResults }: MapViewProps) {
         <div className="absolute top-4 left-4 z-10">
           <ChargerConfig
             h3Cell={selectedH3Cell}
+            location={selectedClickLocation ?? (() => {
+              const [lat, lng] = getH3Center(selectedH3Cell)
+              return { lat, lng }
+            })()}
             onClose={() => {
               setShowChargerConfig(false)
+              setSelectedClickLocation(null)
+              setSelectedPlacementCell(null)
               selectH3Cell(null)
             }}
           />

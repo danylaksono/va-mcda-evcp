@@ -56,6 +56,8 @@ export function ParallelCoordinates() {
   const activeScenarioId = useScenarioStore((s) => s.activeScenarioId)
   const currentPlacements = useScenarioStore((s) => s.currentPlacements)
   const setActiveScenario = useScenarioStore((s) => s.setActiveScenario)
+  const setPlacements = useScenarioStore((s) => s.setPlacements)
+  const resetWorkingScenario = useScenarioStore((s) => s.resetWorkingScenario)
 
   const [containerWidth, setContainerWidth] = useState(0)
   const [containerHeight, setContainerHeight] = useState(0)
@@ -233,7 +235,13 @@ export function ParallelCoordinates() {
       setPolarities(scenario.polarities)
     }
     setMethod(scenario.method)
+    setPlacements(scenario.placements)
     setActiveScenario(scenario.id)
+  }
+
+  function handleResetScenario() {
+    resetWeights()
+    resetWorkingScenario()
   }
 
   function togglePolarity(criterionId: string, polarity: CriterionPolarity) {
@@ -254,9 +262,9 @@ export function ParallelCoordinates() {
           <div className="flex flex-col items-end gap-1.5 flex-1">
             <div className="flex items-center justify-end gap-2 w-full">
               <button 
-                onClick={resetWeights} 
+                onClick={handleResetScenario} 
                 className="btn-secondary flex h-8 items-center justify-center gap-1.5 px-3 whitespace-nowrap text-[11px]" 
-                title="Reset Weights"
+                title="Reset Working Scenario"
               >
                 <RefreshCcw className="h-3.5 w-3.5" strokeWidth={2.2} />
                 <span className="hidden sm:inline">Reset</span>

@@ -39,7 +39,7 @@ export function Dashboard({ totalRows, mcdaResults }: DashboardProps) {
 
   return (
     <div className="h-screen flex flex-col bg-slate-100">
-      <Header totalRows={totalRows} computeTime={computeTime} />
+      {/* <Header totalRows={totalRows} computeTime={computeTime} /> */}
 
       <div className="flex-1 flex overflow-hidden">
         {/* Left Panel: MCDA Controls */}

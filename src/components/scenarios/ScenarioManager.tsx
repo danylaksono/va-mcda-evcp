@@ -13,6 +13,8 @@ export function ScenarioManager() {
   const saveScenario = useScenarioStore((s) => s.saveScenario)
   const deleteScenario = useScenarioStore((s) => s.deleteScenario)
   const setActiveScenario = useScenarioStore((s) => s.setActiveScenario)
+  const setPlacements = useScenarioStore((s) => s.setPlacements)
+  const setSelectedPlacementCell = useScenarioStore((s) => s.setSelectedPlacementCell)
   const loadFromStorage = useScenarioStore((s) => s.loadFromStorage)
   const currentPlacements = useScenarioStore((s) => s.currentPlacements)
 
@@ -47,6 +49,8 @@ export function ScenarioManager() {
       setPolarities(scenario.polarities)
     }
     setMethod(scenario.method)
+    setPlacements(scenario.placements)
+    setSelectedPlacementCell(null)
     setActiveScenario(scenario.id)
   }
 

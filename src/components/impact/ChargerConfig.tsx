@@ -1,21 +1,96 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useScenarioStore } from '@/store/scenario-store'
 import { CHARGER_SPECS } from '@/analysis/types'
 import type { ChargerType } from '@/analysis/types'
 import { formatCurrency } from '@/utils/format'
 
+const addressCache = new Map<string, string>()
+
+function getCacheKey(lat: number, lng: number) {
+  return `${lat.toFixed(5)},${lng.toFixed(5)}`
+}
+
 interface ChargerConfigProps {
   h3Cell: string
+  location: { lat: number; lng: number }
   onClose: () => void
 }
 
-export function ChargerConfig({ h3Cell, onClose }: ChargerConfigProps) {
+export function ChargerConfig({ h3Cell, location, onClose }: ChargerConfigProps) {
   const [chargerType, setChargerType] = useState<ChargerType>('fast')
   const [chargerCount, setChargerCount] = useState(4)
+  const [address, setAddress] = useState<string | null>(null)
+  const [addressLoading, setAddressLoading] = useState(false)
+  const [addressError, setAddressError] = useState<string | null>(null)
   const addPlacement = useScenarioStore((s) => s.addPlacement)
 
   const spec = CHARGER_SPECS[chargerType]
   const totalCost = spec.costGBP * chargerCount
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const cacheKey = getCacheKey(location.lat, location.lng)
+
+    const cachedAddress = addressCache.get(cacheKey)
+    if (cachedAddress) {
+      setAddress(cachedAddress)
+      setAddressError(null)
+      setAddressLoading(false)
+      return () => {
+        controller.abort()
+      }
+    }
+
+    async function reverseGeocode() {
+      try {
+        setAddressLoading(true)
+        setAddressError(null)
+        setAddress(null)
+
+        const params = new URLSearchParams({
+          format: 'jsonv2',
+          lat: location.lat.toString(),
+          lon: location.lng.toString(),
+          zoom: '18',
+          addressdetails: '1',
+          'accept-language': 'en',
+        })
+
+        const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`, {
+          method: 'GET',
+          signal: controller.signal,
+          headers: {
+            Accept: 'application/json',
+          },
+        })
+
+        if (!response.ok) {
+          throw new Error(`Reverse geocoding failed (${response.status})`)
+        }
+
+        const data = (await response.json()) as { display_name?: string }
+        if (typeof data.display_name === 'string' && data.display_name.trim().length > 0) {
+          addressCache.set(cacheKey, data.display_name)
+          setAddress(data.display_name)
+        } else {
+          setAddressError('Address unavailable for this location')
+        }
+      } catch (error) {
+        if (controller.signal.aborted) return
+        setAddressError(error instanceof Error ? error.message : 'Unable to resolve address')
+      } finally {
+        if (!controller.signal.aborted) {
+          setAddressLoading(false)
+        }
+      }
+    }
+
+    reverseGeocode()
+
+    return () => {
+      controller.abort()
+    }
+  }, [location.lat, location.lng])
 
   function handlePlace() {
     addPlacement(h3Cell, chargerType, chargerCount)
@@ -36,10 +111,18 @@ export function ChargerConfig({ h3Cell, onClose }: ChargerConfigProps) {
       <div className="p-4 space-y-3">
         <div>
           <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
-            H3 Cell
+            Selected Address
           </div>
-          <div className="text-[11px] font-mono text-slate-600 bg-slate-50 px-2 py-1 rounded truncate">
-            {h3Cell}
+          <div className="text-[11px] text-slate-700 bg-slate-50 px-2 py-1 rounded leading-relaxed">
+            {addressLoading && 'Looking up address...'}
+            {!addressLoading && address && address}
+            {!addressLoading && !address && addressError && (
+              <span className="text-amber-700">{addressError}</span>
+            )}
+            {!addressLoading && !address && !addressError && 'Address unavailable'}
+          </div>
+          <div className="text-[10px] text-slate-400 mt-1">
+            {location.lat.toFixed(5)}, {location.lng.toFixed(5)}
           </div>
         </div>
 
