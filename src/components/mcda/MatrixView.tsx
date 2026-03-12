@@ -9,12 +9,24 @@ export function MatrixView() {
   const activeCriteria = criteria.filter((c) => c.active)
   const sortedByWeight = [...activeCriteria].sort((a, b) => b.weight - a.weight)
   const weightSource = ahpMetrics ? 'AHP' : 'Manual / Scenario'
+  const activeWeightTotal = activeCriteria.reduce((sum, criterion) => sum + criterion.weight, 0)
+  const normalizedActiveWeights = activeCriteria.map((criterion) => ({
+    ...criterion,
+    normalizedWeight: activeWeightTotal > 0 ? criterion.weight / activeWeightTotal : 0,
+  }))
 
   const methodDescriptions: Record<string, string> = {
     WSM: 'Score = Σ(wᵢ × Sᵢ) — Linear weighted sum of normalized scores',
     WPM: 'Score = Π(Sᵢ^wᵢ) — Weighted product of normalized scores',
     TOPSIS: 'Score = D⁻ / (D⁺ + D⁻) — Distance to ideal/anti-ideal solutions',
   }
+
+  const equationText =
+    method === 'WPM'
+      ? 'Score = Π(s_i^w_i)'
+      : method === 'TOPSIS'
+        ? 'Score = D- / (D+ + D-)'
+        : 'Score = Σ(w_i · s_i)'
 
   return (
     <div className="space-y-4">
@@ -144,12 +156,34 @@ export function MatrixView() {
         </div>
       </div>
 
-      {/* Sensitivity Indicator */}
-      <div className="p-3 bg-blue-50 rounded-lg border border-blue-100">
-        <div className="text-[10px] font-bold text-blue-700 uppercase tracking-widest mb-1">
-          Weight Entropy
+      {/* Model Context */}
+      <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Current Equation</div>
+          <div className="text-[10px] font-semibold text-slate-400">{activeCriteria.length} active criteria</div>
         </div>
-        <div className="text-xs text-blue-600">
+
+        <div className="mt-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[11px] font-mono text-slate-700">
+          {equationText}
+        </div>
+
+        <div className="mt-3 h-3 w-full overflow-hidden rounded-full bg-slate-200">
+          <div className="flex h-full w-full">
+            {normalizedActiveWeights.map((criterion) => (
+              <div
+                key={`diag-stack-${criterion.id}`}
+                className="h-full"
+                style={{
+                  width: `${criterion.normalizedWeight * 100}%`,
+                  backgroundColor: criterion.color,
+                }}
+                title={`${criterion.name}: ${(criterion.normalizedWeight * 100).toFixed(1)}%`}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-2 text-xs text-slate-600">
           {(() => {
             const weights = activeCriteria.map((c) => c.weight)
             const entropy = -weights.reduce((s, w) => {
@@ -159,9 +193,9 @@ export function MatrixView() {
             const maxEntropy = Math.log2(weights.length)
             const normalized = maxEntropy > 0 ? entropy / maxEntropy : 0
 
-            if (normalized > 0.9) return 'Weights are nearly equal — low sensitivity to individual criteria'
-            if (normalized > 0.7) return 'Moderate weight dispersion — balanced sensitivity'
-            return 'High weight concentration — results sensitive to dominant criteria'
+            if (normalized > 0.9) return 'Weights are nearly equal, so outcomes are less sensitive to any single criterion.'
+            if (normalized > 0.7) return 'Weights are moderately dispersed, indicating balanced multi-criteria sensitivity.'
+            return 'Weights are concentrated, so outcomes are highly sensitive to dominant criteria.'
           })()}
         </div>
       </div>

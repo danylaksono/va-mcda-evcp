@@ -32,6 +32,9 @@ export function AHPComparison() {
   const [panState, setPanState] = useState<{ pointerId: number; pointerX: number; pointerY: number; baseX: number; baseY: number } | null>(null)
 
   const activeCriteria = criteria.filter((c) => c.active)
+  const requiredComparisons = Math.max(0, (activeCriteria.length * (activeCriteria.length - 1)) / 2)
+  const completionRatio = requiredComparisons > 0 ? comparisons.length / requiredComparisons : 0
+  const completionPct = Math.min(100, completionRatio * 100)
 
   const liveMetrics = useMemo(() => {
     return solveAHP(criteria, comparisons)
@@ -601,6 +604,39 @@ export function AHPComparison() {
       )}
 
       {/* Actions */}
+      <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">AHP Equation Context</div>
+          <div className="text-[10px] font-semibold text-slate-400">
+            {comparisons.length}/{requiredComparisons} comparisons
+          </div>
+        </div>
+
+        <div className="mt-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[11px] font-mono text-slate-700">
+          A w = λmax w, CI = (λmax - n) / (n - 1), CR = CI / RI
+        </div>
+
+        <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
+          <div
+            className="h-full rounded-full bg-brand-500 transition-all duration-300"
+            style={{ width: `${completionPct}%` }}
+          />
+        </div>
+
+        <div className="mt-2 grid grid-cols-2 gap-2 text-[10px]">
+          <div className="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+            <div className="text-slate-400 uppercase tracking-[0.12em]">Live λmax</div>
+            <div className="font-mono font-bold text-slate-700">{liveMetrics.lambdaMax.toFixed(3)}</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+            <div className="text-slate-400 uppercase tracking-[0.12em]">Live CR</div>
+            <div className={`font-mono font-bold ${liveMetrics.isConsistent ? 'text-emerald-600' : 'text-amber-600'}`}>
+              {liveMetrics.consistencyRatio.toFixed(3)}
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="flex gap-2">
         <button
           onClick={() => {
