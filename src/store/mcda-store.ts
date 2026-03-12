@@ -38,7 +38,7 @@ export const useMCDAStore = create<MCDAState>((set, get) => ({
 
   setWeight: (criterionId, weight) => {
     const updated = adjustWeight(get().criteria, criterionId, weight)
-    set({ criteria: updated })
+    set({ criteria: updated, ahpMetrics: null })
   },
 
   setWeights: (weights) => {
@@ -46,14 +46,14 @@ export const useMCDAStore = create<MCDAState>((set, get) => ({
       ...c,
       weight: weights[c.id] ?? c.weight,
     }))
-    set({ criteria: updated })
+    set({ criteria: updated, ahpMetrics: null })
   },
 
   toggleCriterion: (criterionId) => {
     const updated = get().criteria.map((c) =>
       c.id === criterionId ? { ...c, active: !c.active } : c
     )
-    set({ criteria: updated })
+    set({ criteria: updated, ahpMetrics: null })
   },
 
   addComparison: (comparison) => {

@@ -4,9 +4,11 @@ import { useMCDAStore } from '@/store/mcda-store'
 export function MatrixView() {
   const criteria = useMCDAStore((s) => s.criteria)
   const method = useMCDAStore((s) => s.method)
+  const ahpMetrics = useMCDAStore((s) => s.ahpMetrics)
 
   const activeCriteria = criteria.filter((c) => c.active)
   const sortedByWeight = [...activeCriteria].sort((a, b) => b.weight - a.weight)
+  const weightSource = ahpMetrics ? 'AHP' : 'Manual / Scenario'
 
   const methodDescriptions: Record<string, string> = {
     WSM: 'Score = Σ(wᵢ × Sᵢ) — Linear weighted sum of normalized scores',
@@ -22,10 +24,56 @@ export function MatrixView() {
           Active Method
         </div>
         <div className="text-sm font-bold text-slate-700">{method}</div>
+        <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1">
+          <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">Weight Source</span>
+          <span
+            className={`text-[10px] font-bold uppercase tracking-wide ${
+              ahpMetrics ? 'text-brand-700' : 'text-slate-600'
+            }`}
+          >
+            {weightSource}
+          </span>
+        </div>
         <div className="text-[11px] text-slate-500 mt-1 italic font-mono">
           {methodDescriptions[method]}
         </div>
       </div>
+
+      {ahpMetrics && (
+        <div className="grid grid-cols-3 gap-2">
+          <div
+            className={`kpi-card ${
+              ahpMetrics.isConsistent
+                ? 'border-emerald-200 bg-emerald-50'
+                : 'border-amber-200 bg-amber-50'
+            }`}
+          >
+            <div className="kpi-label">AHP CR</div>
+            <div className="text-lg font-mono font-bold">
+              {ahpMetrics.consistencyRatio.toFixed(3)}
+            </div>
+            <div
+              className={`text-[9px] font-bold uppercase ${
+                ahpMetrics.isConsistent ? 'text-emerald-600' : 'text-amber-600'
+              }`}
+            >
+              {ahpMetrics.isConsistent ? 'Consistent' : 'Inconsistent'}
+            </div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-label">AHP CI</div>
+            <div className="text-lg font-mono font-bold">
+              {ahpMetrics.consistencyIndex.toFixed(3)}
+            </div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-label">AHP λ max</div>
+            <div className="text-lg font-mono font-bold">
+              {ahpMetrics.lambdaMax.toFixed(2)}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Weight Distribution Matrix */}
       <div>
