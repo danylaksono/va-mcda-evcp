@@ -69,9 +69,10 @@ export function Dashboard({ totalRows, mcdaResults }: DashboardProps) {
           </div>
 
           {/* Weight Summary */}
-          <div className="border-t border-slate-200">
+          {/* Not needed */}
+          {/* <div className="border-t border-slate-200">
             <WeightSummary />
-          </div>
+          </div> */}
         </div>
 
         {/* Center: Map */}

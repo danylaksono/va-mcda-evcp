@@ -199,18 +199,70 @@ export function AHPComparison() {
       )}
 
       {/* View Content */}
-      <div 
-        className="flex justify-center items-center py-4 bg-slate-50 rounded-lg border border-slate-200 relative min-h-[300px]"
-      >
-        <svg 
-          width="300" height="300" 
-          className="overflow-visible"
-          onPointerMove={handleGraphPointerMove}
-          onPointerUp={handleGraphPointerUp}
-          onPointerLeave={handleGraphPointerUp}
-          onWheel={handleGraphWheel}
+      {viewMode === 'matrix' ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[10px] border-collapse">
+            <thead>
+              <tr>
+                <th className="p-1.5 bg-slate-50 border border-slate-200" />
+                {activeCriteria.map((c) => (
+                  <th
+                    key={c.id}
+                    className="p-1.5 bg-slate-50 border border-slate-200 font-bold"
+                    style={{ color: c.color }}
+                  >
+                    {c.name.split(' ')[0]}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {activeCriteria.map((row) => (
+                <tr key={row.id}>
+                  <td
+                    className="p-1.5 bg-slate-50 border border-slate-200 font-bold"
+                    style={{ color: row.color }}
+                  >
+                    {row.name.split(' ')[0]}
+                  </td>
+                  {activeCriteria.map((col) => {
+                    const value = row.id === col.id ? 1 : getComparisonValue(row.id, col.id)
+                    const isSelected =
+                      selectedPair &&
+                      ((selectedPair[0] === row.id && selectedPair[1] === col.id) ||
+                        (selectedPair[0] === col.id && selectedPair[1] === row.id))
+
+                    return (
+                      <td
+                        key={col.id}
+                        onClick={() => handleCellClick(row.id, col.id)}
+                        className={`p-1.5 border border-slate-200 text-center font-mono cursor-pointer transition-colors
+                          ${row.id === col.id ? 'bg-slate-100 text-slate-400' : ''}
+                          ${isSelected ? 'bg-brand-50 ring-1 ring-brand-400' : 'hover:bg-slate-50'}
+                          ${value && value > 1 ? 'text-brand-700 font-bold' : ''}
+                          ${value && value < 1 ? 'text-slate-400' : ''}
+                        `}
+                      >
+                        {value !== null ? value.toFixed(2) : '—'}
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div 
+          className="flex justify-center items-center py-4 bg-slate-50 rounded-lg border border-slate-200 relative min-h-[300px]"
         >
-          <g transform={`scale(${zoom})`} style={{ transformOrigin: 'center' }}>
+          <svg 
+            width="300" height="300" 
+            className="overflow-visible"
+            onPointerMove={handleGraphPointerMove}
+            onPointerUp={handleGraphPointerUp}
+            onPointerLeave={handleGraphPointerUp}
+          >
             <g id="links">
               {comparisons.map((comp, idx) => {
                 const p1 = nodePositions.get(comp.criterion1)
@@ -302,90 +354,24 @@ export function AHPComparison() {
                 )
               })}
             </g>
-            <g id="particles">
-              {particlePositions.map((alt, i) => (
-                <g key={i} transform={`translate(${alt.x}, ${alt.y})`} className="transition-transform duration-500 ease-out pointer-events-none">
-                  <circle r={6} fill={alt.color} stroke="#fff" strokeWidth={1.5} style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))' }} />
-                  <text dy="-10" textAnchor="middle" className="text-[9px] font-bold fill-slate-700 shadow-sm">
-                    {alt.name}
-                  </text>
-                </g>
-              ))}
-            </g>
-          </g>
-        </svg>
-        <div className="absolute top-2 right-2 flex flex-col items-end">
-          {pendingNode && (
-            <div className="text-[10px] bg-brand-100 text-brand-700 px-2 py-1 rounded shadow-sm">
-              Select another node to compare
-            </div>
-          )}
-          {!pendingNode && comparisons.length > 0 && (
-             <div className="text-[10px] text-slate-400 bg-white/80 px-2 py-1 rounded shadow-sm mb-1">
-               Drag the blue puck to adjust weight
-             </div>
-          )}
-          <div className="text-[9px] text-slate-400 bg-white/80 px-2 py-1 rounded shadow-sm">
-            Scroll to zoom in/out
+          </svg>
+          <div className="absolute top-2 right-2 flex flex-col items-end">
+            {pendingNode && (
+              <div className="text-[10px] bg-brand-100 text-brand-700 px-2 py-1 rounded shadow-sm">
+                Select another node to compare
+              </div>
+            )}
+            {!pendingNode && comparisons.length > 0 && (
+               <div className="text-[10px] text-slate-400 bg-white/80 px-2 py-1 rounded">
+                 Drag the blue puck to adjust weight
+               </div>
+            )}
           </div>
         </div>
-      </div>
+      )}
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-[10px] border-collapse">
-          <thead>
-            <tr>
-              <th className="p-1.5 bg-slate-50 border border-slate-200" />
-              {activeCriteria.map((c) => (
-                <th
-                  key={c.id}
-                  className="p-1.5 bg-slate-50 border border-slate-200 font-bold"
-                  style={{ color: c.color }}
-                >
-                  {c.name.split(' ')[0]}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {activeCriteria.map((row) => (
-              <tr key={row.id}>
-                <td
-                  className="p-1.5 bg-slate-50 border border-slate-200 font-bold"
-                  style={{ color: row.color }}
-                >
-                  {row.name.split(' ')[0]}
-                </td>
-                {activeCriteria.map((col) => {
-                  const value = row.id === col.id ? 1 : getComparisonValue(row.id, col.id)
-                  const isSelected =
-                    selectedPair &&
-                    ((selectedPair[0] === row.id && selectedPair[1] === col.id) ||
-                      (selectedPair[0] === col.id && selectedPair[1] === row.id))
-
-                  return (
-                    <td
-                      key={col.id}
-                      onClick={() => handleCellClick(row.id, col.id)}
-                      className={`p-1.5 border border-slate-200 text-center font-mono cursor-pointer transition-colors
-                        ${row.id === col.id ? 'bg-slate-100 text-slate-400' : ''}
-                        ${isSelected ? 'bg-brand-50 ring-1 ring-brand-400' : 'hover:bg-slate-50'}
-                        ${value && value > 1 ? 'text-brand-700 font-bold' : ''}
-                        ${value && value < 1 ? 'text-slate-400' : ''}
-                      `}
-                    >
-                      {value !== null ? value.toFixed(2) : '—'}
-                    </td>
-                  )
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Slider for selected pair */}
-      {selectedPair && (
+      {/* Slider for selected pair (Only shown in Matrix view) */}
+      {viewMode === 'matrix' && selectedPair && (
         <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
           <div className="flex justify-between text-[10px] font-bold mb-1">
             <span style={{ color: criteria.find((c) => c.id === selectedPair[0])?.color }}>
