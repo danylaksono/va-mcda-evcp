@@ -3,8 +3,9 @@ MCDA Layer details
 | layer                | mcda field              | normalized field                    | explanation                                                                     |
 | -------------------- | ----------------------- | ----------------------------------- | ------------------------------------------------------------------------------- |
 | population_density   | pop_density             | pop_density_normalized              | population density                                                              |
-| car_ownership        | one_or_more             | one_or_more_normalized              | households with at least one car                                                |
+| car_ownership        | more_than_one           | more_than_one_normalized            | households with more than one car                                               |
 | deprived_households  | two_or_more             | two_or_more_normalized              | households with two deprivations or more                                        |
+| disabled_population  | disabled_pct            | disabled_pct_normalized             | share of residents reporting disability                                          |
 | access_employment    | employment_30           | employment_30_normalized            | Number of employment facilities accessible from 30 minutes on public transport  |
 | access_supermarket   | supermarket_30          | supermarket_30_normalized           | Number of supermarket facilities accessible from 30 minutes on public transport |
 | transport_emission   | road_2025               | road_2025_normalized                | All road CO2 tonnes/year emission by 2025                                       |

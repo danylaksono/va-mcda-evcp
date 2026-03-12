@@ -15,16 +15,22 @@ const DATA_LAYERS: DataLayer[] = [
     fields: ['pop_density', 'pop_density_normalized'],
   },
   {
-    filename: 'car_ownership_h3_r10.parquet',
-    tableName: 'car_ownership',
+    filename: 'car_ownership_corrected_h3_r10.parquet',
+    tableName: 'car_ownership_corrected',
     joinField: 'h3_cell',
-    fields: ['one_or_more', 'one_or_more_normalized'],
+    fields: ['more_than_one', 'more_than_one_normalized'],
   },
   {
     filename: 'deprived_households_h3_r10.parquet',
     tableName: 'deprived_households',
     joinField: 'h3_cell',
     fields: ['two_or_more', 'two_or_more_normalized'],
+  },
+  {
+    filename: 'disabled_h3_r10.parquet',
+    tableName: 'disabled_population',
+    joinField: 'h3_cell',
+    fields: ['disabled_pct', 'disabled_pct_normalized'],
   },
   {
     filename: 'access_employment_h3_r10.parquet',

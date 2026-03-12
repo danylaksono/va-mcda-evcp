@@ -232,7 +232,7 @@ src/
 | # | Criterion | Normalized Field | Category |
 |---|-----------|-----------------|----------|
 | 1 | Population Density | pop_density_normalized | Demand |
-| 2 | Car Ownership (1+) | one_or_more_normalized | Demand |
+| 2 | Car Ownership (>1) | more_than_one_normalized | Demand |
 | 3 | Deprivation (2+) | two_or_more_normalized | Equity |
 | 4 | Employment Access (30min) | employment_30_normalized | Accessibility |
 | 5 | Supermarket Access (30min) | supermarket_30_normalized | Accessibility |

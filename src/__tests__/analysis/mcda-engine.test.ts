@@ -45,7 +45,7 @@ describe('MCDA Engine', () => {
       const sql = buildWSMQuery(criteria)
 
       expect(sql).toContain('pop_density_normalized')
-      expect(sql).toContain('one_or_more_normalized')
+      expect(sql).toContain('more_than_one_normalized')
       expect(sql).toContain('two_or_more_normalized')
       expect(sql).not.toContain('employment_30_normalized')
     })
