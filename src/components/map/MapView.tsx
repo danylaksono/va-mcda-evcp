@@ -15,7 +15,7 @@ import { useScenarioStore } from '@/store/scenario-store'
 import { h3ScoresToGeoJSON, getH3Center } from '@/utils/h3-utils'
 import { scoreToColor } from '@/utils/color-scales'
 import { ChargerConfig } from '../impact/ChargerConfig'
-import { Zap } from 'lucide-react'
+import { SlidersHorizontal, Zap } from 'lucide-react'
 import type { EVCPPlacement } from '@/analysis/types'
 
 interface MapViewProps {
@@ -194,7 +194,8 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const [showPolygonLayer, setShowPolygonLayer] = useState(true)
   const [polygonOpacity, setPolygonOpacity] = useState(0.65)
   const [showGlyphLayer, setShowGlyphLayer] = useState(false)
-  const [showTooltips, setShowTooltips] = useState(true)
+  const [showTooltips, setShowTooltips] = useState(false)
+  const [showLayerPanel, setShowLayerPanel] = useState(true)
   const [glyphType, setGlyphType] = useState<'bars' | 'rose'>('bars')
   const [glyphAggregation, setGlyphAggregation] = useState<'auto' | 6 | 7 | 8 | 9 | 10>(7)
   const [glyphSizeScale, setGlyphSizeScale] = useState(1)
@@ -698,8 +699,45 @@ export function MapView({ mcdaResults }: MapViewProps) {
     }
 
     map.on('click', onMapClick)
+
+    const onChargepointClick = (e: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
+      if (!e.features || e.features.length === 0) return
+      
+      // Stop the click from propagating to the underlying MCDA polygon or map background
+      e.originalEvent.stopPropagation()
+
+      const feature = e.features[0]
+      const props = feature.properties || {}
+      
+      const popupHtml = `
+        <div class="p-2 min-w-[200px]">
+          <h3 class="text-sm font-bold border-b pb-1 mb-2">Existing Chargepoint</h3>
+          <div class="space-y-1 text-xs text-slate-700">
+            <p><strong>Operator:</strong> ${props.operator || 'Unknown'}</p>
+            <p><strong>Location:</strong> ${props.location_name || 'N/A'}</p>
+            <p><strong>Type:</strong> ${props.connector_types || 'N/A'}</p>
+            <p><strong>Status:</strong> ${props.status || 'Active'}</p>
+          </div>
+        </div>
+      `
+      
+      new maplibregl.Popup({ closeButton: true, className: 'chargepoint-popup' })
+        .setLngLat(e.lngLat)
+        .setHTML(popupHtml)
+        .addTo(map)
+    }
+
+    map.on('click', 'london-chargepoints', onChargepointClick)
+    map.on('mouseenter', 'london-chargepoints', () => {
+      map.getCanvas().style.cursor = 'pointer'
+    })
+    map.on('mouseleave', 'london-chargepoints', () => {
+      map.getCanvas().style.cursor = isSimulationMode ? EVCP_CURSOR : ''
+    })
+
     return () => {
       map.off('click', onMapClick)
+      map.off('click', 'london-chargepoints', onChargepointClick)
     }
   }, [comparisonGlyph, isSimulationMode, selectedPlacementCell, setSelectedPlacementCell])
 
@@ -1203,161 +1241,183 @@ export function MapView({ mcdaResults }: MapViewProps) {
     <div className="relative flex-1">
       <div ref={mapContainer} className="w-full h-full" />
 
-      <div className="absolute top-24 left-3 z-10">
-        <button
-          onClick={() => {
-            const next = !isSimulationMode
-            setSimulationMode(next)
-            if (!next) {
-              setShowChargerConfig(false)
-              setSelectedClickLocation(null)
-              setSelectedPlacementCell(null)
-              selectH3Cell(null)
-            }
-          }}
-          className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold shadow-lg transition-colors ${
-            isSimulationMode
-              ? 'bg-amber-500 text-white border-amber-600'
-              : 'bg-white/95 text-slate-700 border-slate-300 hover:bg-slate-50'
-          }`}
-          title="Toggle EVCP placement mode"
-        >
-          <Zap className="h-3.5 w-3.5" strokeWidth={2.5} />
-          {isSimulationMode ? 'Simulation: ON' : 'Simulate EVCP Placement'}
-        </button>
+      <div className="absolute top-2 left-14 z-10">
+        <div className="inline-flex overflow-hidden rounded-lg border border-slate-300 shadow-lg">
+          <button
+            onClick={() => {
+              const next = !isSimulationMode
+              setSimulationMode(next)
+              if (!next) {
+                setShowChargerConfig(false)
+                setSelectedClickLocation(null)
+                setSelectedPlacementCell(null)
+                selectH3Cell(null)
+              }
+            }}
+            className={`inline-flex items-center gap-2 px-3 py-2 text-xs font-bold transition-colors ${
+              isSimulationMode
+                ? 'bg-amber-500 text-white'
+                : 'bg-white/95 text-slate-700 hover:bg-slate-50'
+            }`}
+            title="Toggle EVCP placement mode"
+          >
+            <Zap className="h-3.5 w-3.5" strokeWidth={2.5} />
+            {isSimulationMode ? 'Simulation: ON' : 'Simulate EVCP Placement'}
+          </button>
+          <label className="inline-flex items-center gap-2 border-l border-slate-300 bg-white/95 px-3 py-2 text-[11px] font-semibold text-slate-600">
+            <input
+              type="checkbox"
+              checked={showTooltips}
+              onChange={(e) => setShowTooltips(e.target.checked)}
+              className="rounded border-slate-300"
+            />
+            Tooltips
+          </label>
+        </div>
       </div>
 
       {/* Layer Controls */}
-      <div className="absolute top-4 right-4 bg-white/95 backdrop-blur-sm rounded-lg shadow-lg p-3 border border-slate-200 min-w-[220px] z-10">
-        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
-          Layers
-        </div>
+      <div className="absolute top-4 right-4 z-10">
+        {showLayerPanel ? (
+          <div className="bg-white/95 backdrop-blur-sm rounded-lg shadow-lg p-3 border border-slate-200 min-w-[220px]">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Layers</div>
+              <button
+                type="button"
+                onClick={() => setShowLayerPanel(false)}
+                className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 text-slate-500 hover:bg-slate-50"
+                aria-label="Hide layers panel"
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+              </button>
+            </div>
 
-        <label className="flex items-center gap-2 text-xs text-slate-700 mb-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={showPolygonLayer}
-            onChange={(e) => setShowPolygonLayer(e.target.checked)}
-            className="rounded border-slate-300"
-          />
-          MCDA Final Score
-        </label>
+            <label className="flex items-center gap-2 text-xs text-slate-700 mb-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showPolygonLayer}
+                onChange={(e) => setShowPolygonLayer(e.target.checked)}
+                className="rounded border-slate-300"
+              />
+              MCDA Final Score
+            </label>
 
-        <div className="mb-2">
-          <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
-            <span>Polygon opacity</span>
-            <span className="font-mono text-slate-600">{Math.round(polygonOpacity * 100)}%</span>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            step={1}
-            value={Math.round(polygonOpacity * 100)}
-            onChange={(e) => setPolygonOpacity(Number(e.target.value) / 100)}
-            disabled={!showPolygonLayer}
-            className="w-full accent-slate-700"
-            aria-label="MCDA polygon opacity"
-          />
-        </div>
+            <div className="mb-2">
+              <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
+                <span>Polygon opacity</span>
+                <span className="font-mono text-slate-600">{Math.round(polygonOpacity * 100)}%</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={Math.round(polygonOpacity * 100)}
+                onChange={(e) => setPolygonOpacity(Number(e.target.value) / 100)}
+                disabled={!showPolygonLayer}
+                className="w-full accent-slate-700"
+                aria-label="MCDA polygon opacity"
+              />
+            </div>
 
-        <label className="flex items-center gap-2 text-xs text-slate-700 mb-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={showGlyphLayer}
-            onChange={(e) => setShowGlyphLayer(e.target.checked)}
-            className="rounded border-slate-300"
-          />
-          Glyph layer
-        </label>
+            <label className="flex items-center gap-2 text-xs text-slate-700 mb-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showGlyphLayer}
+                onChange={(e) => setShowGlyphLayer(e.target.checked)}
+                className="rounded border-slate-300"
+              />
+              Glyph layer
+            </label>
 
-        <label className="flex items-center gap-2 text-xs text-slate-700 mb-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={showTooltips}
-            onChange={(e) => setShowTooltips(e.target.checked)}
-            className="rounded border-slate-300"
-          />
-          Show tooltips
-        </label>
+            <div className="mt-2">
+              <div className="text-[10px] text-slate-500 mb-1">Overlays</div>
+              <div className="flex flex-col gap-2">
+                {PMTILES_OVERLAYS.map((overlay) => (
+                  <label key={overlay.id} className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={overlayVisibility[overlay.id] ?? false}
+                      onChange={(e) =>
+                        setOverlayVisibility((prev) => ({
+                          ...prev,
+                          [overlay.id]: e.target.checked,
+                        }))
+                      }
+                      className="rounded border-slate-300"
+                    />
+                    {overlay.label}
+                  </label>
+                ))}
+              </div>
+            </div>
 
-        <div className="mt-2">
-          <div className="text-[10px] text-slate-500 mb-1">Overlays</div>
-          <div className="flex flex-col gap-2">
-            {PMTILES_OVERLAYS.map((overlay) => (
-              <label key={overlay.id} className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={overlayVisibility[overlay.id] ?? false}
-                  onChange={(e) =>
-                    setOverlayVisibility((prev) => ({
-                      ...prev,
-                      [overlay.id]: e.target.checked,
-                    }))
+            <div className="mt-2">
+              <div className="text-[10px] text-slate-500 mb-1">Glyph type</div>
+              <select
+                value={glyphType}
+                onChange={(e) => setGlyphType(e.target.value as 'bars' | 'rose')}
+                className="w-full text-xs rounded-md border border-slate-300 bg-white px-2 py-1"
+                disabled={!showGlyphLayer}
+              >
+                <option value="bars">Bar chart</option>
+                <option value="rose">Rose chart (petal length)</option>
+              </select>
+            </div>
+
+            <div className="mt-2">
+              <div className="text-[10px] text-slate-500 mb-1">Glyph aggregation</div>
+              <select
+                value={glyphAggregation}
+                onChange={(e) => {
+                  const value = e.target.value
+                  if (value === 'auto') {
+                    setGlyphAggregation('auto')
+                  } else {
+                    setGlyphAggregation(Number(value) as 6 | 7 | 8 | 9 | 10)
                   }
-                  className="rounded border-slate-300"
-                />
-                {overlay.label}
-              </label>
-            ))}
+                }}
+                className="w-full text-xs rounded-md border border-slate-300 bg-white px-2 py-1"
+                disabled={!showGlyphLayer}
+              >
+                <option value="auto">Auto (current result resolution)</option>
+                <option value="10">H3 r10 (finest)</option>
+                <option value="9">H3 r9</option>
+                <option value="8">H3 r8</option>
+                <option value="7">H3 r7</option>
+                <option value="6">H3 r6 (coarse)</option>
+              </select>
+            </div>
+
+            <div className="mt-2">
+              {/* <div className="text-[10px] text-slate-500 mb-1">Glyph size</div>
+              <div className="text-xs text-slate-700">
+                {(glyphSizeScale * 100).toFixed(0)}%
+              </div> */}
+              {/* <div className="text-[10px] text-slate-500 mt-0.5">
+                Hold Shift + scroll to resize
+              </div> */}
+            </div>
+
+            <div className="mt-2 text-[10px] text-slate-500">
+              Pattern fill = cost criterion
+            </div>
+            {/* {showGlyphLayer && (
+              <div className="mt-1 text-[10px] text-slate-500">
+                Click a glyph to compare. Click again or empty map to clear.
+              </div>
+            )} */}
           </div>
-        </div>
-
-        <div className="mt-2">
-          <div className="text-[10px] text-slate-500 mb-1">Glyph type</div>
-          <select
-            value={glyphType}
-            onChange={(e) => setGlyphType(e.target.value as 'bars' | 'rose')}
-            className="w-full text-xs rounded-md border border-slate-300 bg-white px-2 py-1"
-            disabled={!showGlyphLayer}
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowLayerPanel(true)}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white/95 text-slate-600 shadow-lg hover:bg-slate-50"
+            aria-label="Show layers panel"
           >
-            <option value="bars">Bar chart</option>
-            <option value="rose">Rose chart (petal length)</option>
-          </select>
-        </div>
-
-        <div className="mt-2">
-          <div className="text-[10px] text-slate-500 mb-1">Glyph aggregation</div>
-          <select
-            value={glyphAggregation}
-            onChange={(e) => {
-              const value = e.target.value
-              if (value === 'auto') {
-                setGlyphAggregation('auto')
-              } else {
-                setGlyphAggregation(Number(value) as 6 | 7 | 8 | 9 | 10)
-              }
-            }}
-            className="w-full text-xs rounded-md border border-slate-300 bg-white px-2 py-1"
-            disabled={!showGlyphLayer}
-          >
-            <option value="auto">Auto (current result resolution)</option>
-            <option value="10">H3 r10 (finest)</option>
-            <option value="9">H3 r9</option>
-            <option value="8">H3 r8</option>
-            <option value="7">H3 r7</option>
-            <option value="6">H3 r6 (coarse)</option>
-          </select>
-        </div>
-
-        <div className="mt-2">
-          {/* <div className="text-[10px] text-slate-500 mb-1">Glyph size</div>
-          <div className="text-xs text-slate-700">
-            {(glyphSizeScale * 100).toFixed(0)}%
-          </div> */}
-          {/* <div className="text-[10px] text-slate-500 mt-0.5">
-            Hold Shift + scroll to resize
-          </div> */}
-        </div>
-
-        <div className="mt-2 text-[10px] text-slate-500">
-          Pattern fill = cost criterion
-        </div>
-        {/* {showGlyphLayer && (
-          <div className="mt-1 text-[10px] text-slate-500">
-            Click a glyph to compare. Click again or empty map to clear.
-          </div>
-        )} */}
+            <SlidersHorizontal className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       {/* Glyph Legend */}
