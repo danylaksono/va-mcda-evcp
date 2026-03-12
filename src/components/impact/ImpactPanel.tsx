@@ -3,10 +3,13 @@ import { useScenarioStore } from '@/store/scenario-store'
 import { estimateImpact, aggregateImpacts } from '@/analysis/impact-model'
 import { CHARGER_SPECS } from '@/analysis/types'
 import { KPICards } from './KPICards'
+import { KPIRadarChart } from './KPIRadarChart'
 
 export function ImpactPanel() {
   const currentPlacements = useScenarioStore((s) => s.currentPlacements)
   const currentImpact = useScenarioStore((s) => s.currentImpact)
+  const scenarios = useScenarioStore((s) => s.scenarios)
+  const activeScenarioId = useScenarioStore((s) => s.activeScenarioId)
   const setCurrentImpact = useScenarioStore((s) => s.setCurrentImpact)
   const removePlacement = useScenarioStore((s) => s.removePlacement)
 
@@ -77,6 +80,12 @@ export function ImpactPanel() {
           {currentImpact && <KPICards impact={currentImpact} />}
         </>
       )}
+
+      <KPIRadarChart
+        currentImpact={currentImpact}
+        scenarios={scenarios}
+        activeScenarioId={activeScenarioId}
+      />
     </div>
   )
 }
