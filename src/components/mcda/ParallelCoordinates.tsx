@@ -95,6 +95,35 @@ export function ParallelCoordinates() {
   const xScale = useMemo(() => d3.scaleLinear().domain([0, 1]).range([0, trackWidth]), [trackWidth])
 
   const compareScenario = scenarios.find((scenario) => scenario.id === activeScenarioId) ?? null
+  const activeCriteria = useMemo(() => criteria.filter((criterion) => criterion.active), [criteria])
+  const activeWeightTotal = useMemo(
+    () => activeCriteria.reduce((sum, criterion) => sum + criterion.weight, 0),
+    [activeCriteria]
+  )
+  const normalizedActiveWeights = useMemo(
+    () =>
+      activeCriteria.map((criterion) => ({
+        ...criterion,
+        normalizedWeight: activeWeightTotal > 0 ? criterion.weight / activeWeightTotal : 0,
+      })),
+    [activeCriteria, activeWeightTotal]
+  )
+
+  const equationText = useMemo(() => {
+    const symbols = normalizedActiveWeights.map((criterion, idx) => `w${idx + 1}`)
+
+    if (method === 'WPM') {
+      return symbols.length > 0 ? `Score = Π(s_i^w_i),  w = [${symbols.join(', ')}]` : 'Score = Π(s_i^w_i)'
+    }
+
+    if (method === 'TOPSIS') {
+      return symbols.length > 0
+        ? `Score = D- / (D+ + D-),  w = [${symbols.join(', ')}]`
+        : 'Score = D- / (D+ + D-)'
+    }
+
+    return symbols.length > 0 ? `Score = Σ(w_i · s_i),  w = [${symbols.join(', ')}]` : 'Score = Σ(w_i · s_i)'
+  }, [method, normalizedActiveWeights])
 
   const lineGenerator = useMemo(
     () =>
@@ -424,6 +453,49 @@ export function ParallelCoordinates() {
               })}
             </div>
           )}
+          </div>
+        )}
+
+        {activeCriteria.length > 0 && (
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Current Equation</div>
+              <div className="text-[10px] font-semibold text-slate-400">{activeCriteria.length} active criteria</div>
+            </div>
+
+            <div className="mt-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[11px] font-mono text-slate-700">
+              {equationText}
+            </div>
+
+            <div className="mt-3 h-3 w-full overflow-hidden rounded-full bg-slate-200">
+              <div className="flex h-full w-full">
+                {normalizedActiveWeights.map((criterion) => (
+                  <div
+                    key={`stack-${criterion.id}`}
+                    className="h-full"
+                    style={{
+                      width: `${criterion.normalizedWeight * 100}%`,
+                      backgroundColor: criterion.color,
+                    }}
+                    title={`${criterion.name}: ${(criterion.normalizedWeight * 100).toFixed(1)}%`}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1">
+              {normalizedActiveWeights.map((criterion, index) => (
+                <div key={`eq-${criterion.id}`} className="flex items-center justify-between gap-2 text-[10px]">
+                  <div className="flex min-w-0 items-center gap-1.5 text-slate-600">
+                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: criterion.color }} />
+                    <span className="truncate font-semibold">w{index + 1}: {criterion.name}</span>
+                  </div>
+                  <span className="font-mono font-bold text-slate-700">
+                    {(criterion.normalizedWeight * 100).toFixed(1)}%
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
