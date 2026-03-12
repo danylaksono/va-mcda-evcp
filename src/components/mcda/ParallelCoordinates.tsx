@@ -7,7 +7,9 @@ import type { MCDAMethod } from '@/analysis/types'
 
 const CHART_TOP = 28
 const CHART_BOTTOM = 18
-const ROW_HEIGHT = 58
+const MIN_ROW_HEIGHT = 46
+const MAX_ROW_HEIGHT = 72
+const FALLBACK_ROW_HEIGHT = 58
 const HANDLE_RADIUS = 8
 const SCENARIO_COLORS = ['#2563eb', '#f97316', '#14b8a6', '#e11d48', '#8b5cf6', '#0f766e']
 
@@ -15,6 +17,20 @@ const METHOD_COPY: Record<MCDAMethod, string> = {
   WSM: 'Linear weighted sum for transparent trade-offs across normalized criteria.',
   WPM: 'Multiplicative scoring that penalizes weak performance more strongly.',
   TOPSIS: 'Ranks options by distance to the ideal and anti-ideal solution.',
+}
+
+function buildActiveLinePath(
+  criteria: Array<{ active: boolean }>,
+  getPoint: (index: number) => { x: number; y: number },
+  lineGenerator: d3.Line<{ x: number; y: number }>
+) {
+  const points = criteria
+    .map((criterion, index) => ({ criterion, index }))
+    .filter(({ criterion }) => criterion.active)
+    .map(({ index }) => getPoint(index))
+
+  if (points.length < 2) return null
+  return lineGenerator(points) ?? null
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -40,6 +56,7 @@ export function ParallelCoordinates() {
   const setActiveScenario = useScenarioStore((s) => s.setActiveScenario)
 
   const [containerWidth, setContainerWidth] = useState(0)
+  const [containerHeight, setContainerHeight] = useState(0)
   const [showSaveForm, setShowSaveForm] = useState(false)
   const [scenarioName, setScenarioName] = useState('')
 
@@ -50,17 +67,29 @@ export function ParallelCoordinates() {
       const entry = entries[0]
       if (entry) {
         setContainerWidth(entry.contentRect.width)
+        setContainerHeight(entry.contentRect.height)
       }
     })
 
     observer.observe(containerRef.current)
     setContainerWidth(containerRef.current.clientWidth)
+    setContainerHeight(containerRef.current.clientHeight)
 
     return () => observer.disconnect()
   }, [criteria.length]) // re-measure if criteria length changes causing render
 
-  const totalHeight = CHART_TOP + CHART_BOTTOM + criteria.length * ROW_HEIGHT
-  const leftGutter = clamp(containerWidth * 0.28, 108, 148)
+  const rowHeight =
+    criteria.length > 0
+      ? clamp((containerHeight - CHART_TOP - CHART_BOTTOM) / criteria.length, MIN_ROW_HEIGHT, MAX_ROW_HEIGHT)
+      : FALLBACK_ROW_HEIGHT
+  const totalHeight = CHART_TOP + CHART_BOTTOM + criteria.length * rowHeight
+
+  const longestLabel = useMemo(
+    () => criteria.reduce((max, criterion) => Math.max(max, criterion.name.length, criterion.category.length), 0),
+    [criteria]
+  )
+  const labelAwareGutter = 44 + longestLabel * 6
+  const leftGutter = clamp(Math.max(containerWidth * 0.28, labelAwareGutter), 124, 210)
   const rightGutter = clamp(containerWidth * 0.14, 52, 72)
   const trackWidth = Math.max(containerWidth - leftGutter - rightGutter, 160)
   const xScale = useMemo(() => d3.scaleLinear().domain([0, 1]).range([0, trackWidth]), [trackWidth])
@@ -77,13 +106,18 @@ export function ParallelCoordinates() {
     []
   )
 
-  const currentLinePath = useMemo(() => {
-    const points = criteria.map((criterion, index) => ({
-      x: xScale(criterion.weight),
-      y: index * ROW_HEIGHT + ROW_HEIGHT / 2,
-    }))
-    return points.length > 1 ? lineGenerator(points) ?? null : null
-  }, [criteria, lineGenerator, xScale])
+  const currentLinePath = useMemo(
+    () =>
+      buildActiveLinePath(
+        criteria,
+        (index) => ({
+          x: xScale(criteria[index]?.weight ?? 0),
+          y: index * rowHeight + rowHeight / 2,
+        }),
+        lineGenerator
+      ),
+    [criteria, lineGenerator, rowHeight, xScale]
+  )
 
   const scenarioPaths = useMemo(
     () =>
@@ -93,14 +127,16 @@ export function ParallelCoordinates() {
         path:
           criteria.length < 2
             ? null
-            : (lineGenerator(
-                criteria.map((criterion, rowIndex) => ({
-                  x: xScale(scenario.weights[criterion.id] ?? 0),
-                  y: rowIndex * ROW_HEIGHT + ROW_HEIGHT / 2,
-                }))
-              ) ?? null),
+            : buildActiveLinePath(
+                criteria,
+                (rowIndex) => ({
+                  x: xScale(scenario.weights[criteria[rowIndex]?.id ?? ''] ?? 0),
+                  y: rowIndex * rowHeight + rowHeight / 2,
+                }),
+                lineGenerator
+              ),
       })),
-    [criteria, lineGenerator, scenarios, xScale]
+    [criteria, lineGenerator, rowHeight, scenarios, xScale]
   )
 
   function updateWeightFromClientX(criterionId: string, clientX: number) {
@@ -159,8 +195,8 @@ export function ParallelCoordinates() {
   }
 
   return (
-    <div className="w-full space-y-4">
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="h-full w-full">
+      <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <SlidersHorizontal className="h-4 w-4 text-slate-400" />
@@ -199,7 +235,7 @@ export function ParallelCoordinates() {
             Activate at least one criterion to draw the parallel coordinates view.
           </div>
         ) : (
-          <div ref={containerRef} className="mt-4 w-full">
+          <div ref={containerRef} className="mt-4 w-full flex-1 min-h-[430px]">
             <svg width={containerWidth || undefined} height={totalHeight} className="block w-full">
               <g transform={`translate(${leftGutter},${CHART_TOP})`}>
                 {[0, 0.25, 0.5, 0.75, 1].map((tick) => (
@@ -208,7 +244,7 @@ export function ParallelCoordinates() {
                     x1={xScale(tick)}
                     x2={xScale(tick)}
                     y1={-10}
-                    y2={criteria.length * ROW_HEIGHT - ROW_HEIGHT / 2}
+                    y2={criteria.length * rowHeight - rowHeight / 2}
                     stroke={tick === 0 || tick === 1 ? '#cbd5e1' : '#e2e8f0'}
                     strokeDasharray={tick === 0 || tick === 1 ? '0' : '3 6'}
                   />
@@ -223,7 +259,7 @@ export function ParallelCoordinates() {
                 </g>
               ))}
 
-              {scenarioPaths.map(({ scenario, path, color }, i) =>
+              {scenarioPaths.map(({ scenario, path, color }) =>
                 path ? (
                   <g key={scenario.id}>
                     <path
@@ -251,7 +287,7 @@ export function ParallelCoordinates() {
               )}
 
               {criteria.map((criterion, index) => {
-                const y = index * ROW_HEIGHT + ROW_HEIGHT / 2
+                const y = index * rowHeight + rowHeight / 2
                 const compareWeight = compareScenario?.weights[criterion.id] ?? null
                 const delta = compareWeight === null ? null : criterion.weight - compareWeight
 
