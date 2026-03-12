@@ -1,7 +1,14 @@
 import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import maplibregl from 'maplibre-gl'
+import type {
+  LineLayerSpecification,
+  CircleLayerSpecification,
+  FillLayerSpecification,
+  SymbolLayerSpecification,
+} from '@maplibre/maplibre-gl-style-spec'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { cellToParent, getResolution } from 'h3-js'
+import { Protocol } from 'pmtiles'
 import { useMapStore } from '@/store/map-store'
 import { useMCDAStore } from '@/store/mcda-store'
 import { useScenarioStore } from '@/store/scenario-store'
@@ -38,6 +45,141 @@ const LONDON_CENTER: [number, number] = [-0.1276, 51.5074]
 const BASEMAP_STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
 const EVCP_CURSOR_SVG = `<svg xmlns='http://www.w3.org/2000/svg' width='34' height='34' viewBox='0 0 34 34'><path fill='%23dc2626' d='M17 33s10-11.2 10-18A10 10 0 1 0 7 15c0 6.8 10 18 10 18Z'/><circle cx='17' cy='14.5' r='6.3' fill='%23fff'/><path fill='%230f172a' d='M18 10h-2.2l-.8 4h2.1l-.8 4 3.7-5h-2.1z'/></svg>`
 const EVCP_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(EVCP_CURSOR_SVG)}") 17 31, crosshair`
+const CHARGEPOINT_ICON_ID = 'chargepoint-marker'
+const CHARGEPOINT_ICON_URL = '/icons/chargepoint-marker.svg'
+
+type OverlayConfig =
+  | {
+      id: string
+      label: string
+      url: string
+      sourceLayer: string
+      type: 'line'
+      paint: NonNullable<LineLayerSpecification['paint']>
+    }
+  | {
+      id: string
+      label: string
+      url: string
+      sourceLayer: string
+      type: 'circle'
+      paint: NonNullable<CircleLayerSpecification['paint']>
+    }
+  | {
+      id: string
+      label: string
+      url: string
+      sourceLayer: string
+      type: 'fill'
+      paint: NonNullable<FillLayerSpecification['paint']>
+    }
+  | {
+      id: string
+      label: string
+      url: string
+      sourceLayer: string
+      type: 'symbol'
+      layout: NonNullable<SymbolLayerSpecification['layout']>
+      paint?: SymbolLayerSpecification['paint']
+    }
+
+const PMTILES_OVERLAYS: OverlayConfig[] = [
+  {
+    id: 'lsoa-boundaries',
+    label: 'LSOA boundaries',
+    url: '/data_source/pmtiles/lsoa_boundaries.pmtiles',
+    sourceLayer: 'lsoa_boundaries',
+    type: 'line',
+    paint: {
+      'line-color': '#0f172a',
+      'line-width': 0.8,
+      'line-opacity': 0.4,
+    },
+  },
+  {
+    id: 'london-boroughs',
+    label: 'London boroughs',
+    url: '/data_source/pmtiles/london_boroughs.pmtiles',
+    sourceLayer: 'london_boroughs',
+    type: 'line',
+    paint: {
+      'line-color': '#0f172a',
+      'line-width': 1.4,
+      'line-opacity': 0.7,
+    },
+  },
+  {
+    id: 'london-chargepoints',
+    label: 'Existing Chargepoints',
+    url: '/data_source/pmtiles/london_chargepoints.pmtiles',
+    sourceLayer: 'london_chargepoints',
+    type: 'symbol',
+    layout: {
+      'icon-image': CHARGEPOINT_ICON_ID,
+      'icon-size': [
+        'interpolate',
+        ['linear'],
+        ['zoom'],
+        9,
+        0.4,
+        12,
+        0.55,
+        15,
+        0.7,
+      ],
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+    },
+  },
+]
+
+const buildOverlayLayer = (
+  overlay: OverlayConfig,
+  sourceId: string,
+  visibility: 'visible' | 'none'
+): LineLayerSpecification | CircleLayerSpecification | FillLayerSpecification | SymbolLayerSpecification => {
+  if (overlay.type === 'line') {
+    return {
+      id: overlay.id,
+      type: 'line',
+      source: sourceId,
+      'source-layer': overlay.sourceLayer,
+      layout: { visibility },
+      paint: overlay.paint,
+    }
+  }
+  if (overlay.type === 'circle') {
+    return {
+      id: overlay.id,
+      type: 'circle',
+      source: sourceId,
+      'source-layer': overlay.sourceLayer,
+      layout: { visibility },
+      paint: overlay.paint,
+    }
+  }
+  if (overlay.type === 'symbol') {
+    return {
+      id: overlay.id,
+      type: 'symbol',
+      source: sourceId,
+      'source-layer': overlay.sourceLayer,
+      layout: {
+        ...overlay.layout,
+        visibility,
+      },
+      paint: overlay.paint ?? {},
+    }
+  }
+  return {
+    id: overlay.id,
+    type: 'fill',
+    source: sourceId,
+    'source-layer': overlay.sourceLayer,
+    layout: { visibility },
+    paint: overlay.paint,
+  }
+}
 
 export function MapView({ mcdaResults }: MapViewProps) {
   const mapContainer = useRef<HTMLDivElement>(null)
@@ -47,6 +189,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const glyphMarkersRef = useRef<maplibregl.Marker[]>([])
   const latestPlacementsRef = useRef<EVCPPlacement[]>([])
   const isSimulationModeRef = useRef(false)
+  const pmtilesProtocolRef = useRef<Protocol | null>(null)
   const [showChargerConfig, setShowChargerConfig] = useState(false)
   const [showPolygonLayer, setShowPolygonLayer] = useState(true)
   const [polygonOpacity, setPolygonOpacity] = useState(0.65)
@@ -57,6 +200,9 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const [glyphSizeScale, setGlyphSizeScale] = useState(1)
   const [comparisonGlyph, setComparisonGlyph] = useState<GlyphDatum | null>(null)
   const [selectedClickLocation, setSelectedClickLocation] = useState<ClickLocation | null>(null)
+  const [overlayVisibility, setOverlayVisibility] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(PMTILES_OVERLAYS.map((overlay) => [overlay.id, false]))
+  )
 
   const setMapReady = useMapStore((s) => s.setMapReady)
   const isMapReady = useMapStore((s) => s.isMapReady)
@@ -180,6 +326,12 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const initMap = useCallback(() => {
     if (!mapContainer.current || mapRef.current) return
 
+    if (!pmtilesProtocolRef.current) {
+      const protocol = new Protocol()
+      maplibregl.addProtocol('pmtiles', protocol.tile)
+      pmtilesProtocolRef.current = protocol
+    }
+
     const map = new maplibregl.Map({
       container: mapContainer.current,
       style: BASEMAP_STYLE,
@@ -196,6 +348,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
     )
 
     map.on('load', () => {
+      // Add H3 layers immediately
       map.addSource('h3-grid', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -306,6 +459,49 @@ export function MapView({ mcdaResults }: MapViewProps) {
         },
       })
 
+      // Use a canvas marker instead of an external image to avoid decoding errors
+      const markerSize = 32
+      const canvas = document.createElement('canvas')
+      canvas.width = markerSize
+      canvas.height = markerSize
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        // Draw a simple marker with softer colors
+        ctx.beginPath()
+        ctx.arc(markerSize / 2, markerSize / 2, markerSize / 2 - 2, 0, Math.PI * 2)
+        ctx.fillStyle = '#9fa1ffe8' // Softer indigo
+        ctx.fill()
+        ctx.strokeStyle = '#ffffff'
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+        
+        // Draw a placeholder lightning bolt or simple shape
+        ctx.fillStyle = '#ffffff'
+        ctx.font = '14px sans-serif' // Smaller font for less intimidation
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText('⚡', markerSize / 2, markerSize / 2)
+
+        const imageData = ctx.getImageData(0, 0, markerSize, markerSize)
+        map.addImage(CHARGEPOINT_ICON_ID, imageData)
+      }
+
+      // Add PMTiles layers
+      for (const overlay of PMTILES_OVERLAYS) {
+        const sourceId = `pmtiles-${overlay.id}`
+        if (!map.getSource(sourceId)) {
+          map.addSource(sourceId, {
+            type: 'vector',
+            url: `pmtiles://${overlay.url}`,
+          })
+        }
+
+        if (!map.getLayer(overlay.id)) {
+          const visibility = overlayVisibility?.[overlay.id] ? 'visible' : 'none'
+          map.addLayer(buildOverlayLayer(overlay, sourceId, visibility))
+        }
+      }
+
       setMapReady(true)
     })
 
@@ -413,6 +609,10 @@ export function MapView({ mcdaResults }: MapViewProps) {
       clearGlyphMarkers()
       mapRef.current?.remove()
       mapRef.current = null
+      if (pmtilesProtocolRef.current) {
+        maplibregl.removeProtocol('pmtiles')
+        pmtilesProtocolRef.current = null
+      }
     }
   }, [initMap, clearGlyphMarkers])
 
@@ -555,6 +755,22 @@ export function MapView({ mcdaResults }: MapViewProps) {
       map.setLayoutProperty('h3-outline', 'visibility', visibility)
     }
   }, [showPolygonLayer])
+
+  // Toggle PMTiles overlay visibility.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded()) return
+
+    for (const overlay of PMTILES_OVERLAYS) {
+      if (map.getLayer(overlay.id)) {
+        map.setLayoutProperty(
+          overlay.id,
+          'visibility',
+          overlayVisibility[overlay.id] ? 'visible' : 'none'
+        )
+      }
+    }
+  }, [overlayVisibility])
 
   // Keep polygon opacity in sync with slider control.
   useEffect(() => {
@@ -1064,6 +1280,28 @@ export function MapView({ mcdaResults }: MapViewProps) {
           />
           Show tooltips
         </label>
+
+        <div className="mt-2">
+          <div className="text-[10px] text-slate-500 mb-1">Overlays</div>
+          <div className="flex flex-col gap-2">
+            {PMTILES_OVERLAYS.map((overlay) => (
+              <label key={overlay.id} className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={overlayVisibility[overlay.id] ?? false}
+                  onChange={(e) =>
+                    setOverlayVisibility((prev) => ({
+                      ...prev,
+                      [overlay.id]: e.target.checked,
+                    }))
+                  }
+                  className="rounded border-slate-300"
+                />
+                {overlay.label}
+              </label>
+            ))}
+          </div>
+        </div>
 
         <div className="mt-2">
           <div className="text-[10px] text-slate-500 mb-1">Glyph type</div>

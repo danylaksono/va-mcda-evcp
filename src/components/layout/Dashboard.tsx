@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { Scale, SlidersHorizontal, TableProperties } from 'lucide-react'
 import { Header } from './Header'
 import { MapView } from '../map/MapView'
+import { DFESTimeseries } from '../dfes/DFESTimeseries'
 import { ParallelCoordinates } from '../mcda/ParallelCoordinates'
 import { AHPComparison } from '../mcda/AHPComparison'
 import { MatrixView } from '../mcda/MatrixView'
@@ -9,6 +10,7 @@ import { WeightSummary } from '../mcda/WeightSummary'
 import { ImpactPanel } from '../impact/ImpactPanel'
 import { ScenarioManager } from '../scenarios/ScenarioManager'
 import { useMCDAStore } from '@/store/mcda-store'
+import { useMapStore } from '@/store/map-store'
 
 type TabId = 'pcp' | 'ahp' | 'matrix'
 
@@ -25,6 +27,8 @@ interface DashboardProps {
 export function Dashboard({ totalRows, mcdaResults }: DashboardProps) {
   const [activeTab, setActiveTab] = useState<TabId>('pcp')
   const computeTime = useMCDAStore((s) => s.lastComputeTime)
+  const selectedLSOA = useMapStore((s) => s.selectedLSOA)
+  const selectedLSOAName = useMapStore((s) => s.selectedLSOAName)
 
   const tabs: {
     id: TabId
@@ -83,6 +87,7 @@ export function Dashboard({ totalRows, mcdaResults }: DashboardProps) {
         {/* Center: Map */}
         <div className="flex-1 flex flex-col">
           <MapView mcdaResults={mcdaResults} />
+          <DFESTimeseries selectedLSOA={selectedLSOA} selectedLSOAName={selectedLSOAName} />
         </div>
 
         {/* Right Panel: Impact & Scenarios */}
