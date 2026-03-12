@@ -46,14 +46,14 @@ export const useMCDAStore = create<MCDAState>((set, get) => ({
       ...c,
       weight: weights[c.id] ?? c.weight,
     }))
-    set({ criteria: normalizeWeights(updated) })
+    set({ criteria: updated })
   },
 
   toggleCriterion: (criterionId) => {
     const updated = get().criteria.map((c) =>
       c.id === criterionId ? { ...c, active: !c.active } : c
     )
-    set({ criteria: normalizeWeights(updated) })
+    set({ criteria: updated })
   },
 
   addComparison: (comparison) => {
@@ -109,9 +109,9 @@ export const useMCDAStore = create<MCDAState>((set, get) => ({
   },
 
   resetWeights: () => {
-    const equalWeight = 1 / CRITERIA_CONFIG.length
+    const defaultWeight = 0.5
     set({
-      criteria: CRITERIA_CONFIG.map((c) => ({ ...c, weight: equalWeight, active: true })),
+      criteria: CRITERIA_CONFIG.map((c) => ({ ...c, weight: defaultWeight, active: true })),
       comparisons: [],
       ahpMetrics: null,
     })

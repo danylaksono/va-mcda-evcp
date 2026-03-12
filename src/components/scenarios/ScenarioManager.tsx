@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { Bookmark, FolderOpen, Save, Trash2 } from 'lucide-react'
 import { useScenarioStore } from '@/store/scenario-store'
 import { useMCDAStore } from '@/store/mcda-store'
 import { formatDate } from '@/utils/format'
@@ -8,8 +9,10 @@ export function ScenarioManager() {
   const [showSaveForm, setShowSaveForm] = useState(false)
 
   const scenarios = useScenarioStore((s) => s.scenarios)
+  const activeScenarioId = useScenarioStore((s) => s.activeScenarioId)
   const saveScenario = useScenarioStore((s) => s.saveScenario)
   const deleteScenario = useScenarioStore((s) => s.deleteScenario)
+  const setActiveScenario = useScenarioStore((s) => s.setActiveScenario)
   const loadFromStorage = useScenarioStore((s) => s.loadFromStorage)
   const currentPlacements = useScenarioStore((s) => s.currentPlacements)
 
@@ -36,19 +39,27 @@ export function ScenarioManager() {
     if (!scenario) return
     setWeights(scenario.weights)
     setMethod(scenario.method)
+    setActiveScenario(scenario.id)
   }
 
   return (
     <div className="p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-          Saved Scenarios
+        <div>
+          <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+            <Bookmark className="h-3.5 w-3.5" strokeWidth={2.2} />
+            Scenario Library
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            Restore full MCDA configurations and compare them in the PCP.
+          </div>
         </div>
         <button
           onClick={() => setShowSaveForm(!showSaveForm)}
-          className="btn-primary text-[10px] px-3 py-1"
+          className="btn-primary text-[10px] px-3 py-1.5"
         >
-          + Save Current
+          <Save className="h-3.5 w-3.5" strokeWidth={2.2} />
+          Save Current
         </button>
       </div>
 
@@ -82,7 +93,11 @@ export function ScenarioManager() {
           {scenarios.map((scenario) => (
             <div
               key={scenario.id}
-              className="p-2.5 bg-slate-50 rounded-lg border border-slate-100 hover:border-slate-300 transition-colors"
+              className={`p-2.5 rounded-xl border transition-colors ${
+                activeScenarioId === scenario.id
+                  ? 'bg-brand-50 border-brand-200'
+                  : 'bg-slate-50 border-slate-100 hover:border-slate-300'
+              }`}
             >
               <div className="flex items-center justify-between mb-1">
                 <div className="text-xs font-bold text-slate-700">{scenario.name}</div>
@@ -91,13 +106,19 @@ export function ScenarioManager() {
                     onClick={() => handleRestore(scenario.id)}
                     className="text-[9px] font-bold text-brand-600 hover:text-brand-800 uppercase"
                   >
-                    Load
+                    <span className="inline-flex items-center gap-1">
+                      <FolderOpen className="h-3 w-3" strokeWidth={2.4} />
+                      Load
+                    </span>
                   </button>
                   <button
                     onClick={() => deleteScenario(scenario.id)}
                     className="text-[9px] font-bold text-slate-400 hover:text-red-500 uppercase"
                   >
-                    Del
+                    <span className="inline-flex items-center gap-1">
+                      <Trash2 className="h-3 w-3" strokeWidth={2.4} />
+                      Del
+                    </span>
                   </button>
                 </div>
               </div>

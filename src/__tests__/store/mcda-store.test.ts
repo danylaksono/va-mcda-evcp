@@ -6,10 +6,10 @@ describe('MCDA Store', () => {
     useMCDAStore.getState().resetWeights()
   })
 
-  it('initializes with equal weights', () => {
+it('initializes with equal default weights', () => {
     const state = useMCDAStore.getState()
     const weights = state.criteria.filter((c) => c.active).map((c) => c.weight)
-    const expectedWeight = 1 / state.criteria.length
+    const expectedWeight = 0.5
 
     weights.forEach((w) => expect(w).toBeCloseTo(expectedWeight, 5))
   })
@@ -19,13 +19,12 @@ describe('MCDA Store', () => {
     expect(useMCDAStore.getState().method).toBe('TOPSIS')
   })
 
-  it('adjusts weight and keeps sum at 1', () => {
-    useMCDAStore.getState().setWeight('pop_density', 0.5)
+  it('adjusts weight of a single criterion', () => {
+    useMCDAStore.getState().setWeight('pop_density', 0.8)
 
     const state = useMCDAStore.getState()
-    const sum = state.criteria.filter((c) => c.active).reduce((s, c) => s + c.weight, 0)
-
-    expect(sum).toBeCloseTo(1, 5)
+    const criterion = state.criteria.find((c) => c.id === 'pop_density')
+    expect(criterion!.weight).toBeCloseTo(0.8, 5)
   })
 
   it('toggles criterion active state', () => {
@@ -35,7 +34,6 @@ describe('MCDA Store', () => {
     const criterion = state.criteria.find((c) => c.id === 'pop_density')
 
     expect(criterion!.active).toBe(false)
-    expect(criterion!.weight).toBe(0)
   })
 
   it('manages comparisons', () => {
@@ -62,12 +60,12 @@ describe('MCDA Store', () => {
     expect(useMCDAStore.getState().comparisons).toHaveLength(1)
   })
 
-  it('resets weights to equal', () => {
+  it('resets weights to default', () => {
     useMCDAStore.getState().setWeight('pop_density', 0.8)
     useMCDAStore.getState().resetWeights()
 
     const state = useMCDAStore.getState()
-    const expectedWeight = 1 / state.criteria.length
+    const expectedWeight = 0.5
 
     state.criteria.forEach((c) => {
       expect(c.weight).toBeCloseTo(expectedWeight, 5)

@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { Scale, SlidersHorizontal, TableProperties } from 'lucide-react'
 import { Header } from './Header'
 import { MapView } from '../map/MapView'
 import { ParallelCoordinates } from '../mcda/ParallelCoordinates'
@@ -20,10 +21,15 @@ export function Dashboard({ totalRows, mcdaResults }: DashboardProps) {
   const [activeTab, setActiveTab] = useState<TabId>('pcp')
   const computeTime = useMCDAStore((s) => s.lastComputeTime)
 
-  const tabs: { id: TabId; label: string }[] = [
-    { id: 'pcp', label: 'Parallel Coordinates' },
-    { id: 'ahp', label: 'AHP Comparison' },
-    { id: 'matrix', label: 'Matrix & Diagnostics' },
+  const tabs: {
+    id: TabId
+    label: string
+    detail: string
+    icon: typeof SlidersHorizontal
+  }[] = [
+    { id: 'pcp', label: 'Weight Lab', detail: 'Method, criteria, scenarios', icon: SlidersHorizontal },
+    { id: 'ahp', label: 'Pairwise AHP', detail: 'Refine relative importance', icon: Scale },
+    { id: 'matrix', label: 'Diagnostics', detail: 'Inspect allocation patterns', icon: TableProperties },
   ]
 
   return (
@@ -32,21 +38,25 @@ export function Dashboard({ totalRows, mcdaResults }: DashboardProps) {
 
       <div className="flex-1 flex overflow-hidden">
         {/* Left Panel: MCDA Controls */}
-        <div className="w-[440px] min-w-[380px] flex flex-col border-r border-slate-200 bg-white overflow-y-auto">
+        <div className="w-[500px] min-w-[420px] flex flex-col border-r border-slate-200 bg-white overflow-y-auto">
           {/* Tab Navigation */}
-          <div className="flex border-b border-slate-200 px-4 pt-3">
+          <div className="grid grid-cols-3 gap-2 border-b border-slate-200 p-4 bg-slate-50/70">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`pb-2.5 px-3 text-xs font-bold uppercase tracking-wider transition-all
+                className={`rounded-2xl border px-3 py-3 text-left transition-all
                   ${
                     activeTab === tab.id
-                      ? 'text-brand-600 border-b-2 border-brand-600'
-                      : 'text-slate-400 hover:text-slate-600'
+                      ? 'border-brand-200 bg-white text-brand-700 shadow-sm'
+                      : 'border-transparent bg-white/60 text-slate-500 hover:border-slate-200 hover:text-slate-700'
                   }`}
               >
-                {tab.label}
+                <tab.icon className="mb-2 h-4 w-4" strokeWidth={2.2} />
+                <div className="text-[11px] font-bold uppercase tracking-[0.16em]">{tab.label}</div>
+                <div className="mt-1 text-[10px] text-slate-400 normal-case tracking-normal">
+                  {tab.detail}
+                </div>
               </button>
             ))}
           </div>

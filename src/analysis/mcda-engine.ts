@@ -83,13 +83,15 @@ ORDER BY mcda_score DESC`
  * Returns the appropriate SQL query builder for the given MCDA method.
  */
 export function buildMCDAQuery(method: MCDAMethod, criteria: Criterion[]): string {
+  // Normalize mathematically for the actual query, while keeping user UI state independent
+  const queryCriteria = normalizeWeights(criteria)
   switch (method) {
     case 'WSM':
-      return buildWSMQuery(criteria)
+      return buildWSMQuery(queryCriteria)
     case 'WPM':
-      return buildWPMQuery(criteria)
+      return buildWPMQuery(queryCriteria)
     case 'TOPSIS':
-      return buildTOPSISQuery(criteria)
+      return buildTOPSISQuery(queryCriteria)
   }
 }
 
@@ -147,7 +149,7 @@ export function normalizeWeights(criteria: Criterion[]): Criterion[] {
 }
 
 /**
- * Adjusts weight of one criterion and redistributes proportionally among others.
+ * Adjusts weight of one criterion without affecting others, enabling independent slider behavior.
  */
 export function adjustWeight(
   criteria: Criterion[],
@@ -155,23 +157,7 @@ export function adjustWeight(
   newWeight: number
 ): Criterion[] {
   const clampedWeight = Math.max(0, Math.min(1, newWeight))
-  const target = criteria.find((c) => c.id === criterionId)
-  if (!target || !target.active) return criteria
-
-  const delta = clampedWeight - target.weight
-  const others = criteria.filter((c) => c.id !== criterionId && c.active)
-  const totalOthers = others.reduce((s, c) => s + c.weight, 0)
-
-  const updated = criteria.map((c) => {
-    if (c.id === criterionId) {
-      return { ...c, weight: clampedWeight }
-    }
-    if (!c.active) return c
-    if (totalOthers > 0) {
-      return { ...c, weight: Math.max(0, c.weight - delta * (c.weight / totalOthers)) }
-    }
-    return { ...c, weight: Math.max(0, c.weight - delta / others.length) }
-  })
-
-  return normalizeWeights(updated)
+  return criteria.map((c) =>
+    c.id === criterionId ? { ...c, weight: clampedWeight } : c
+  )
 }

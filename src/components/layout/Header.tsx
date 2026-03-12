@@ -1,6 +1,5 @@
 import React from 'react'
 import { useMCDAStore } from '@/store/mcda-store'
-import type { MCDAMethod } from '@/analysis/types'
 
 interface HeaderProps {
   totalRows: number
@@ -8,8 +7,6 @@ interface HeaderProps {
 }
 
 export function Header({ totalRows, computeTime }: HeaderProps) {
-  const method = useMCDAStore((s) => s.method)
-  const setMethod = useMCDAStore((s) => s.setMethod)
   const isComputing = useMCDAStore((s) => s.isComputing)
 
   return (
@@ -49,21 +46,6 @@ export function Header({ totalRows, computeTime }: HeaderProps) {
         )}
       </div>
 
-      <div className="flex items-center gap-3">
-        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-          Method:
-        </label>
-        <select
-          value={method}
-          onChange={(e) => setMethod(e.target.value as MCDAMethod)}
-          className="bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-sm font-medium
-                     focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none shadow-sm"
-        >
-          <option value="WSM">Weighted Sum (WSM)</option>
-          <option value="WPM">Weighted Product (WPM)</option>
-          <option value="TOPSIS">TOPSIS</option>
-        </select>
-      </div>
     </header>
   )
 }

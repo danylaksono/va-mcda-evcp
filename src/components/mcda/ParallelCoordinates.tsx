@@ -1,198 +1,472 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import * as d3 from 'd3'
+import { ArrowLeftRight, BookmarkPlus, RefreshCcw, SlidersHorizontal, Target } from 'lucide-react'
 import { useMCDAStore } from '@/store/mcda-store'
 import { useScenarioStore } from '@/store/scenario-store'
-import type { Criterion } from '@/analysis/types'
+import type { MCDAMethod } from '@/analysis/types'
 
-const MARGIN = { top: 12, right: 20, bottom: 12, left: 130 }
-const ROW_HEIGHT = 44
-const HANDLE_RADIUS = 7
+const MARGIN = { top: 28, right: 110, bottom: 18, left: 178 }
+const ROW_HEIGHT = 58
+const HANDLE_RADIUS = 8
+const SCENARIO_COLORS = ['#2563eb', '#f97316', '#14b8a6', '#e11d48', '#8b5cf6', '#0f766e']
+
+const METHOD_COPY: Record<MCDAMethod, string> = {
+  WSM: 'Linear weighted sum for transparent trade-offs across normalized criteria.',
+  WPM: 'Multiplicative scoring that penalizes weak performance more strongly.',
+  TOPSIS: 'Ranks options by distance to the ideal and anti-ideal solution.',
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
+}
 
 export function ParallelCoordinates() {
-  const svgRef = useRef<SVGSVGElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const dragCriterionRef = useRef<string | null>(null)
 
   const criteria = useMCDAStore((s) => s.criteria)
+  const method = useMCDAStore((s) => s.method)
+  const setMethod = useMCDAStore((s) => s.setMethod)
   const setWeight = useMCDAStore((s) => s.setWeight)
+  const setWeights = useMCDAStore((s) => s.setWeights)
+  const toggleCriterion = useMCDAStore((s) => s.toggleCriterion)
+  const resetWeights = useMCDAStore((s) => s.resetWeights)
+
   const scenarios = useScenarioStore((s) => s.scenarios)
+  const saveScenario = useScenarioStore((s) => s.saveScenario)
+  const activeScenarioId = useScenarioStore((s) => s.activeScenarioId)
+  const currentPlacements = useScenarioStore((s) => s.currentPlacements)
+  const setActiveScenario = useScenarioStore((s) => s.setActiveScenario)
+
+  const [containerWidth, setContainerWidth] = useState(0)
+  const [showSaveForm, setShowSaveForm] = useState(false)
+  const [scenarioName, setScenarioName] = useState('')
 
   useEffect(() => {
-    if (!svgRef.current || !containerRef.current) return
+    if (!containerRef.current) return
 
-    const containerWidth = containerRef.current.getBoundingClientRect().width
-    const activeCriteria = criteria.filter((c) => c.active)
-    const totalHeight = MARGIN.top + MARGIN.bottom + activeCriteria.length * ROW_HEIGHT
-    const trackWidth = containerWidth - MARGIN.left - MARGIN.right
-
-    const svg = d3.select(svgRef.current)
-    svg.selectAll('*').remove()
-    svg.attr('width', containerWidth).attr('height', totalHeight)
-
-    const g = svg.append('g').attr('transform', `translate(${MARGIN.left},${MARGIN.top})`)
-
-    const yScale = d3
-      .scaleBand<string>()
-      .domain(activeCriteria.map((c) => c.id))
-      .range([0, activeCriteria.length * ROW_HEIGHT])
-      .padding(0.2)
-
-    const xScale = d3.scaleLinear().domain([0, 1]).range([0, trackWidth])
-
-    // Grid lines at 25% intervals
-    const gridTicks = [0.25, 0.5, 0.75]
-    gridTicks.forEach((tick) => {
-      g.append('line')
-        .attr('x1', xScale(tick))
-        .attr('x2', xScale(tick))
-        .attr('y1', 0)
-        .attr('y2', activeCriteria.length * ROW_HEIGHT)
-        .attr('stroke', '#f1f5f9')
-        .attr('stroke-width', 1)
-        .attr('stroke-dasharray', '2,3')
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry) {
+        setContainerWidth(entry.contentRect.width)
+      }
     })
 
-    // Draw saved scenario ghost markers
-    scenarios.forEach((scenario) => {
-      activeCriteria.forEach((c) => {
-        const w = scenario.weights[c.id] ?? 0
-        const cy = (yScale(c.id) ?? 0) + yScale.bandwidth() / 2
-        g.append('circle')
-          .attr('cx', xScale(w))
-          .attr('cy', cy)
-          .attr('r', 3)
-          .attr('fill', '#94a3b8')
-          .attr('fill-opacity', 0.35)
-      })
-    })
+    observer.observe(containerRef.current)
+    setContainerWidth(containerRef.current.getBoundingClientRect().width)
 
-    // Connect current weights with a polyline
-    const linePoints = activeCriteria.map((c) => ({
-      x: xScale(c.weight),
-      y: (yScale(c.id) ?? 0) + yScale.bandwidth() / 2,
-    }))
+    return () => observer.disconnect()
+  }, [])
 
-    if (linePoints.length > 1) {
-      const line = d3
+  const activeCriteria = criteria.filter((criterion) => criterion.active)
+  const totalHeight = MARGIN.top + MARGIN.bottom + activeCriteria.length * ROW_HEIGHT
+  const trackWidth = Math.max(containerWidth - MARGIN.left - MARGIN.right, 180)
+  const xScale = useMemo(() => d3.scaleLinear().domain([0, 1]).range([0, trackWidth]), [trackWidth])
+
+  const compareScenario = scenarios.find((scenario) => scenario.id === activeScenarioId) ?? null
+
+  const lineGenerator = useMemo(
+    () =>
+      d3
         .line<{ x: number; y: number }>()
-        .x((d) => d.x)
-        .y((d) => d.y)
-        .curve(d3.curveMonotoneY)
+        .x((point) => point.x)
+        .y((point) => point.y)
+        .curve(d3.curveMonotoneY),
+    []
+  )
 
-      g.append('path')
-        .datum(linePoints)
-        .attr('d', line)
-        .attr('fill', 'none')
-        .attr('stroke', '#4c6ef5')
-        .attr('stroke-width', 1.5)
-        .attr('stroke-opacity', 0.35)
+  const currentLinePath = useMemo(() => {
+    if (activeCriteria.length < 2) return null
+
+    return (
+      lineGenerator(
+        activeCriteria.map((criterion, index) => ({
+          x: xScale(criterion.weight),
+          y: index * ROW_HEIGHT + ROW_HEIGHT / 2,
+        }))
+      ) ?? null
+    )
+  }, [activeCriteria, lineGenerator, xScale])
+
+  const scenarioPaths = useMemo(
+    () =>
+      scenarios.map((scenario, index) => ({
+        scenario,
+        color: SCENARIO_COLORS[index % SCENARIO_COLORS.length],
+        path:
+          activeCriteria.length < 2
+            ? null
+            : (lineGenerator(
+                activeCriteria.map((criterion, rowIndex) => ({
+                  x: xScale(scenario.weights[criterion.id] ?? 0),
+                  y: rowIndex * ROW_HEIGHT + ROW_HEIGHT / 2,
+                }))
+              ) ?? null),
+      })),
+    [activeCriteria, lineGenerator, scenarios, xScale]
+  )
+
+  function updateWeightFromClientX(criterionId: string, clientX: number) {
+    if (!containerRef.current) return
+
+    const rect = containerRef.current.getBoundingClientRect()
+    const localX = clientX - rect.left - MARGIN.left
+    const nextWeight = clamp(xScale.invert(localX), 0, 1)
+    setWeight(criterionId, nextWeight)
+  }
+
+  useEffect(() => {
+    function handlePointerMove(event: PointerEvent) {
+      if (!dragCriterionRef.current) return
+      updateWeightFromClientX(dragCriterionRef.current, event.clientX)
     }
 
-    // Draw each criterion row
-    const rows = g
-      .selectAll('.criterion-row')
-      .data(activeCriteria)
-      .enter()
-      .append('g')
-      .attr('transform', (d) => `translate(0, ${yScale(d.id)})`)
+    function handlePointerUp() {
+      dragCriterionRef.current = null
+    }
 
-    // Track background
-    rows
-      .append('rect')
-      .attr('x', 0)
-      .attr('y', yScale.bandwidth() * 0.35)
-      .attr('width', trackWidth)
-      .attr('height', yScale.bandwidth() * 0.3)
-      .attr('rx', 3)
-      .attr('fill', '#f1f5f9')
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
 
-    // Track fill (from 0 to weight)
-    rows
-      .append('rect')
-      .attr('x', 0)
-      .attr('y', yScale.bandwidth() * 0.35)
-      .attr('width', (d) => xScale(d.weight))
-      .attr('height', yScale.bandwidth() * 0.3)
-      .attr('rx', 3)
-      .attr('fill', (d) => d.color)
-      .attr('fill-opacity', 0.25)
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+    }
+  }, [xScale, setWeight])
 
-    // Active fill bar
-    rows
-      .append('rect')
-      .attr('x', 0)
-      .attr('y', yScale.bandwidth() * 0.42)
-      .attr('width', (d) => xScale(d.weight))
-      .attr('height', yScale.bandwidth() * 0.16)
-      .attr('rx', 2)
-      .attr('fill', (d) => d.color)
-      .attr('fill-opacity', 0.7)
+  function startDragging(criterionId: string, clientX: number) {
+    dragCriterionRef.current = criterionId
+    updateWeightFromClientX(criterionId, clientX)
+  }
 
-    // Draggable handle
-    rows
-      .append('circle')
-      .attr('cx', (d) => xScale(d.weight))
-      .attr('cy', yScale.bandwidth() / 2)
-      .attr('r', HANDLE_RADIUS)
-      .attr('fill', '#fff')
-      .attr('stroke', (d) => d.color)
-      .attr('stroke-width', 2.5)
-      .attr('cursor', 'ew-resize')
-      .style('filter', 'drop-shadow(0 1px 3px rgba(0,0,0,0.15))')
-      .call(
-        d3.drag<SVGCircleElement, Criterion>().on('drag', function (event, d) {
-          const newWeight = Math.max(0, Math.min(1, xScale.invert(event.x)))
-          setWeight(d.id, newWeight)
-        })
-      )
+  function handleSaveScenario() {
+    const name = scenarioName.trim() || `Scenario ${scenarios.length + 1}`
+    const weights: Record<string, number> = {}
 
-    // Labels (left of track)
-    rows
-      .append('text')
-      .attr('x', -8)
-      .attr('y', yScale.bandwidth() / 2)
-      .attr('text-anchor', 'end')
-      .attr('dominant-baseline', 'middle')
-      .attr('class', 'text-[10px] font-semibold fill-slate-700')
-      .text((d) => d.name)
-
-    // Color dot next to label
-    rows
-      .append('circle')
-      .attr('cx', -MARGIN.left + 8)
-      .attr('cy', yScale.bandwidth() / 2)
-      .attr('r', 3.5)
-      .attr('fill', (d) => d.color)
-
-    // Weight percentage (right of handle)
-    rows
-      .append('text')
-      .attr('x', (d) => Math.max(xScale(d.weight) + 14, 28))
-      .attr('y', yScale.bandwidth() / 2)
-      .attr('dominant-baseline', 'middle')
-      .attr('class', 'text-[9px] font-mono font-bold fill-slate-400')
-      .text((d) => `${(d.weight * 100).toFixed(0)}%`)
-
-    // Top axis ticks
-    const topTicks = [0, 0.25, 0.5, 0.75, 1]
-    topTicks.forEach((tick) => {
-      g.append('text')
-        .attr('x', xScale(tick))
-        .attr('y', -2)
-        .attr('text-anchor', 'middle')
-        .attr('class', 'text-[7px] fill-slate-300 font-mono')
-        .text(tick === 0 ? '0' : tick === 1 ? '1.0' : tick.toFixed(2))
+    criteria.forEach((criterion) => {
+      weights[criterion.id] = criterion.weight
     })
-  }, [criteria, setWeight, scenarios])
 
-  const activeCriteria = criteria.filter((c) => c.active)
-  const totalHeight = MARGIN.top + MARGIN.bottom + activeCriteria.length * ROW_HEIGHT
+    saveScenario(name, weights, method)
+    setScenarioName('')
+    setShowSaveForm(false)
+  }
+
+  function loadScenario(scenarioId: string) {
+    const scenario = scenarios.find((entry) => entry.id === scenarioId)
+    if (!scenario) return
+
+    setWeights(scenario.weights)
+    setMethod(scenario.method)
+    setActiveScenario(scenario.id)
+  }
 
   return (
-    <div ref={containerRef} className="w-full">
-      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">
-        Drag handles to adjust criterion weights
+    <div ref={containerRef} className="w-full space-y-4">
+      <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-blue-50/70 p-4 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-md">
+            <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">
+              <SlidersHorizontal className="h-3.5 w-3.5" strokeWidth={2.2} />
+              Parallel Coordinates Weight Lab
+            </div>
+            <h2 className="mt-2 text-lg font-bold tracking-tight text-slate-800">
+              Tune weights directly on the axes, then compare against saved scenarios.
+            </h2>
+            <p className="mt-1 text-[12px] leading-relaxed text-slate-500">
+              The PCP allows independent 0–100% adjustment for intuitive tuning. 
+              Weights are mathematically normalized behind the scenes based on the number of active parameters.
+            </p>
+          </div>
+
+          <div className="min-w-[250px] space-y-3 rounded-2xl border border-white/70 bg-white/80 p-3 shadow-sm backdrop-blur">
+            <div>
+              <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+                <Target className="h-3.5 w-3.5" strokeWidth={2.2} />
+                Step 1. Select Method
+              </div>
+              <select
+                value={method}
+                onChange={(event) => setMethod(event.target.value as MCDAMethod)}
+                className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
+              >
+                <option value="WSM">Weighted Sum (WSM)</option>
+                <option value="WPM">Weighted Product (WPM)</option>
+                <option value="TOPSIS">TOPSIS</option>
+              </select>
+              <div className="mt-2 text-[11px] leading-relaxed text-slate-500">{METHOD_COPY[method]}</div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button onClick={resetWeights} className="btn-secondary px-3 py-1.5 text-[10px]">
+                <RefreshCcw className="h-3.5 w-3.5" strokeWidth={2.2} />
+                Reset Weights
+              </button>
+              <button
+                onClick={() => setShowSaveForm((value) => !value)}
+                className="btn-primary px-3 py-1.5 text-[10px]"
+              >
+                <BookmarkPlus className="h-3.5 w-3.5" strokeWidth={2.2} />
+                Save Snapshot
+              </button>
+            </div>
+
+            {showSaveForm && (
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={scenarioName}
+                  onChange={(event) => setScenarioName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') handleSaveScenario()
+                  }}
+                  placeholder={`Scenario ${scenarios.length + 1}`}
+                  className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
+                />
+                <button onClick={handleSaveScenario} className="btn-primary px-3 py-2 text-[10px]">
+                  Save
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 xl:grid-cols-[1.2fr,1fr]">
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+              Step 2. Choose Active Criteria
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {criteria.map((criterion) => (
+                <button
+                  key={criterion.id}
+                  onClick={() => toggleCriterion(criterion.id)}
+                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.16em] transition-all ${
+                    criterion.active
+                      ? 'border-slate-300 bg-white text-slate-700 shadow-sm'
+                      : 'border-slate-200 bg-slate-100 text-slate-400'
+                  }`}
+                >
+                  <span
+                    className="h-2 w-2 rounded-full"
+                    style={{ backgroundColor: criterion.active ? criterion.color : '#cbd5e1' }}
+                  />
+                  {criterion.name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+              <ArrowLeftRight className="h-3.5 w-3.5" strokeWidth={2.2} />
+              Step 3. Compare Saved Scenarios
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                onClick={() => setActiveScenario(null)}
+                className={`rounded-full border px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.16em] transition-all ${
+                  activeScenarioId === null
+                    ? 'border-slate-800 bg-slate-800 text-white'
+                    : 'border-slate-300 bg-white text-slate-600'
+                }`}
+              >
+                Current State
+              </button>
+              {scenarioPaths.map(({ scenario, color }) => (
+                <button
+                  key={scenario.id}
+                  onClick={() => setActiveScenario(activeScenarioId === scenario.id ? null : scenario.id)}
+                  className={`rounded-full border px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.16em] transition-all ${
+                    activeScenarioId === scenario.id
+                      ? 'bg-white text-slate-800 shadow-sm'
+                      : 'bg-slate-100 text-slate-500 hover:bg-white'
+                  }`}
+                  style={{ borderColor: color }}
+                >
+                  {scenario.name}
+                </button>
+              ))}
+            </div>
+            {compareScenario && (
+              <div className="mt-2 flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-500">
+                <div>
+                  Comparing against <span className="font-bold text-slate-700">{compareScenario.name}</span>
+                  {' '}({compareScenario.method}, {compareScenario.placements.length} placements)
+                </div>
+                <button onClick={() => loadScenario(compareScenario.id)} className="text-[10px] font-bold uppercase text-brand-600">
+                  Load to workspace
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
-      <svg ref={svgRef} className="w-full" style={{ height: totalHeight }} />
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+              Step 4. Adjust on the Rail
+            </div>
+            <div className="mt-1 text-[12px] text-slate-500">
+              Click or drag anywhere on a rail to set a criterion share. Saved lines stay in view for sensitivity checks.
+            </div>
+          </div>
+          <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
+            {activeCriteria.length} active axes · {currentPlacements.length} charger placements
+          </div>
+        </div>
+
+        {activeCriteria.length === 0 ? (
+          <div className="py-16 text-center text-sm text-slate-400">
+            Activate at least one criterion to draw the parallel coordinates view.
+          </div>
+        ) : (
+          <svg width={containerWidth || undefined} height={totalHeight} className="mt-4 w-full overflow-visible">
+            <g transform={`translate(${MARGIN.left},${MARGIN.top})`}>
+              {[0, 0.25, 0.5, 0.75, 1].map((tick) => (
+                <g key={tick}>
+                  <line
+                    x1={xScale(tick)}
+                    x2={xScale(tick)}
+                    y1={-10}
+                    y2={activeCriteria.length * ROW_HEIGHT - ROW_HEIGHT / 2}
+                    stroke={tick === 0 || tick === 1 ? '#cbd5e1' : '#e2e8f0'}
+                    strokeDasharray={tick === 0 || tick === 1 ? '0' : '3 6'}
+                  />
+                  <text
+                    x={xScale(tick)}
+                    y={-14}
+                    textAnchor="middle"
+                    className="fill-slate-400 text-[10px] font-mono"
+                  >
+                    {`${Math.round(tick * 100)}%`}
+                  </text>
+                </g>
+              ))}
+
+              {scenarioPaths.map(({ scenario, path, color }) =>
+                path ? (
+                  <path
+                    key={scenario.id}
+                    d={path}
+                    fill="none"
+                    stroke={color}
+                    strokeWidth={activeScenarioId === scenario.id ? 2.8 : 1.8}
+                    strokeOpacity={activeScenarioId === scenario.id ? 0.7 : 0.18}
+                  />
+                ) : null
+              )}
+
+              {currentLinePath && (
+                <path
+                  d={currentLinePath}
+                  fill="none"
+                  stroke="#0f172a"
+                  strokeWidth={3}
+                  strokeOpacity={0.9}
+                />
+              )}
+
+              {activeCriteria.map((criterion, index) => {
+                const y = index * ROW_HEIGHT + ROW_HEIGHT / 2
+                const compareWeight = compareScenario?.weights[criterion.id] ?? null
+                const delta = compareWeight === null ? null : criterion.weight - compareWeight
+
+                return (
+                  <g key={criterion.id} transform={`translate(0, ${y})`}>
+                    <line
+                      x1={0}
+                      x2={trackWidth}
+                      y1={0}
+                      y2={0}
+                      stroke="#e2e8f0"
+                      strokeWidth={12}
+                      strokeLinecap="round"
+                    />
+                    <line
+                      x1={0}
+                      x2={xScale(criterion.weight)}
+                      y1={0}
+                      y2={0}
+                      stroke={criterion.color}
+                      strokeWidth={12}
+                      strokeOpacity={0.18}
+                      strokeLinecap="round"
+                    />
+                    <line
+                      x1={0}
+                      x2={xScale(criterion.weight)}
+                      y1={0}
+                      y2={0}
+                      stroke={criterion.color}
+                      strokeWidth={4}
+                      strokeLinecap="round"
+                    />
+
+                    {scenarioPaths.map(({ scenario, color }) => (
+                      <circle
+                        key={scenario.id}
+                        cx={xScale(scenario.weights[criterion.id] ?? 0)}
+                        cy={0}
+                        r={activeScenarioId === scenario.id ? 4.5 : 3}
+                        fill={color}
+                        fillOpacity={activeScenarioId === scenario.id ? 0.85 : 0.3}
+                        stroke="white"
+                        strokeWidth={1}
+                      />
+                    ))}
+
+                    <rect
+                      x={0}
+                      y={-18}
+                      width={trackWidth}
+                      height={36}
+                      fill="transparent"
+                      className="cursor-ew-resize"
+                      onPointerDown={(event) => startDragging(criterion.id, event.clientX)}
+                    />
+
+                    <circle
+                      cx={xScale(criterion.weight)}
+                      cy={0}
+                      r={HANDLE_RADIUS}
+                      fill="white"
+                      stroke={criterion.color}
+                      strokeWidth={3}
+                      style={{ filter: 'drop-shadow(0 4px 10px rgba(15, 23, 42, 0.18))' }}
+                      className="cursor-ew-resize"
+                      onPointerDown={(event) => startDragging(criterion.id, event.clientX)}
+                    />
+
+                    <circle cx={-148} cy={-1} r={5} fill={criterion.color} />
+                    <text x={-132} y={-3} className="fill-slate-700 text-[12px] font-semibold">
+                      {criterion.name}
+                    </text>
+                    <text x={-132} y={13} className="fill-slate-400 text-[10px] uppercase tracking-[0.14em]">
+                      {criterion.category}
+                    </text>
+
+                    <text x={trackWidth + 14} y={-2} className="fill-slate-700 text-[11px] font-mono font-bold">
+                      {(criterion.weight * 100).toFixed(1)}%
+                    </text>
+                    {delta !== null && (
+                      <text
+                        x={trackWidth + 14}
+                        y={13}
+                        className={`text-[10px] font-bold ${delta >= 0 ? 'fill-emerald-500' : 'fill-rose-500'}`}
+                      >
+                        {`${delta >= 0 ? '+' : ''}${(delta * 100).toFixed(1)} vs ref`}
+                      </text>
+                    )}
+                  </g>
+                )
+              })}
+            </g>
+          </svg>
+        )}
+      </div>
     </div>
   )
 }

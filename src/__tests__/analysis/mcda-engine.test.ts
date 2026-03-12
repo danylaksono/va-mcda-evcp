@@ -122,15 +122,16 @@ describe('MCDA Engine', () => {
   })
 
   describe('adjustWeight', () => {
-    it('adjusts target and redistributes among others', () => {
+    it('adjusts target without redistributing among others', () => {
       const criteria = makeCriteria()
-      const adjusted = adjustWeight(criteria, 'pop_density', 0.5)
+      const originalOtherWeight = criteria.find((c) => c.id !== 'pop_density')!.weight
+      const adjusted = adjustWeight(criteria, 'pop_density', 0.8)
 
       const target = adjusted.find((c) => c.id === 'pop_density')
-      expect(target!.weight).toBeCloseTo(0.5, 1)
+      expect(target!.weight).toBeCloseTo(0.8, 1)
 
-      const sum = adjusted.filter((c) => c.active).reduce((s, c) => s + c.weight, 0)
-      expect(sum).toBeCloseTo(1, 5)
+      const other = adjusted.find((c) => c.id !== 'pop_density')
+      expect(other!.weight).toBeCloseTo(originalOtherWeight, 5)
     })
 
     it('clamps weight to [0, 1]', () => {
@@ -141,13 +142,12 @@ describe('MCDA Engine', () => {
       expect(target!.weight).toBeLessThanOrEqual(1)
     })
 
-    it('does not modify inactive criteria', () => {
+    it('modifies inactive criteria if targeted', () => {
       const criteria = makeCriteria()
-      const originalWeight = criteria[0].weight
       criteria[0].active = false
-      const adjusted = adjustWeight(criteria, criteria[0].id, 0.5)
+      const adjusted = adjustWeight(criteria, criteria[0].id, 0.75)
 
-      expect(adjusted[0].weight).toBe(originalWeight)
+      expect(adjusted[0].weight).toBe(0.75)
       expect(adjusted[0].active).toBe(false)
     })
   })
