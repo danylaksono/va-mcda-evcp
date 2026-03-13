@@ -6,6 +6,7 @@ import { useDFESData, type DFESScope } from '@/hooks/useDFESData'
 import { useScenarioStore } from '@/store/scenario-store'
 import { estimateImpact, aggregateImpacts } from '@/analysis/impact-model'
 import type { PlacementCellData, ImpactEstimate } from '@/analysis/types'
+import { buildScenarioRenderList, type ScenarioRenderInfo } from '@/scenarios/scenario-styles'
 
 const CHART_MARGIN = { top: 20, right: 30, bottom: 40, left: 60 }
 const API_KEY = import.meta.env.VITE_DFES_API_KEY || '7fe348e85bd7f26ab10a115c33d44bb5f3e79946d54886f900782042'
@@ -104,6 +105,29 @@ export function DFESTimeseries({ selectedLSOA: mapSelectedLSOA, selectedLSOAName
   const currentPlacements = useScenarioStore((s) => s.currentPlacements)
   const baseImpact = useScenarioStore((s) => s.currentImpact)
   const isSimulationMode = useScenarioStore((s) => s.isSimulationMode)
+  const scenarios = useScenarioStore((s) => s.scenarios)
+  const visibleScenarioIds = useScenarioStore((s) => s.visibleScenarioIds)
+  const comparedScenarioIds = useScenarioStore((s) => s.comparedScenarioIds)
+
+  const scenarioRenderList = useMemo<ScenarioRenderInfo[]>(
+    () =>
+      buildScenarioRenderList(
+        scenarios.map((s) => s.id),
+        comparedScenarioIds,
+        visibleScenarioIds
+      ),
+    [scenarios, comparedScenarioIds, visibleScenarioIds]
+  )
+
+  const scenarioSupplyLines = useMemo(() => {
+    return scenarioRenderList
+      .map((info) => {
+        const scenario = scenarios.find((s) => s.id === info.id)
+        if (!scenario?.impactSummary) return null
+        return { info, impact: scenario.impactSummary, name: scenario.name }
+      })
+      .filter(Boolean) as Array<{ info: ScenarioRenderInfo; impact: ImpactEstimate; name: string }>
+  }, [scenarioRenderList, scenarios])
 
   useEffect(() => {
     if (activeSelectedLSOA && activeBoroughName) {
@@ -353,6 +377,45 @@ export function DFESTimeseries({ selectedLSOA: mapSelectedLSOA, selectedLSOAName
 
     const years = Array.from(new Set(allPoints.map((p) => p.year))).sort((a, b) => a - b)
 
+    // Saved scenario supply lines (behind draft)
+    scenarioSupplyLines.forEach(({ info, impact, name }) => {
+      const val = impactToMetricValue(impact, selectedMetric)
+      const sy = yScale(val)
+      if (sy < -20 || sy > height + 20) return
+
+      const scenG = g.append('g').attr('class', 'scenario-supply-overlay')
+
+      scenG.append('line')
+        .attr('x1', 0)
+        .attr('x2', width)
+        .attr('y1', sy)
+        .attr('y2', sy)
+        .attr('stroke', info.style.stroke)
+        .attr('stroke-width', info.style.strokeWidth * 0.6)
+        .attr('stroke-dasharray', info.mode === 'muted' ? '4,4' : '6,3')
+        .style('opacity', info.style.opacity)
+
+      if (info.mode === 'highlighted') {
+        const lbl = name.length > 16 ? name.slice(0, 14) + '..' : name
+        const lw = Math.max(60, lbl.length * 5.5 + 14)
+        scenG.append('rect')
+          .attr('x', 4)
+          .attr('y', sy - 14)
+          .attr('width', lw)
+          .attr('height', 14)
+          .attr('fill', info.style.stroke)
+          .attr('rx', 3)
+          .style('opacity', 0.75)
+        scenG.append('text')
+          .attr('x', 4 + lw / 2)
+          .attr('y', sy - 4)
+          .attr('text-anchor', 'middle')
+          .attr('fill', 'white')
+          .attr('class', 'text-[8px] font-bold')
+          .text(lbl)
+      }
+    })
+
     // Simulation Impact Overlay (all metrics)
     if (currentImpact) {
       const supplyValue = impactToMetricValue(currentImpact, selectedMetric)
@@ -596,7 +659,7 @@ export function DFESTimeseries({ selectedLSOA: mapSelectedLSOA, selectedLSOAName
             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 leading-tight">
               {scopeLevel === 'lsoa' && (activeSelectedLSOAName || activeSelectedLSOA)}
               {scopeLevel === 'borough' && activeBoroughName}
-              {scopeLevel === 'network' && 'All UKPN Area'}
+              {scopeLevel === 'network' && 'Greater London Area'}
               <span className="text-slate-300 font-light ml-1 text-sm">Pathways Overview</span>
               {componentSelectedLSOA && (
                 <button

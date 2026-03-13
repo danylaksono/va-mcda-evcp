@@ -1,17 +1,13 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useMemo } from 'react'
 import type { ImpactEstimate, Scenario } from '@/analysis/types'
 import { formatCO2, formatCompact, formatCurrency, formatEnergy, formatPercent } from '@/utils/format'
-
-const RADAR_SELECTION_KEY = 'va-mcda-impact-radar-selection'
-
-const RADAR_COLORS = [
-  { stroke: '#0f766e', fill: 'rgba(15, 118, 110, 0.18)' },
-  { stroke: '#1d4ed8', fill: 'rgba(29, 78, 216, 0.15)' },
-  { stroke: '#7c3aed', fill: 'rgba(124, 58, 237, 0.15)' },
-  { stroke: '#b45309', fill: 'rgba(180, 83, 9, 0.15)' },
-  { stroke: '#be123c', fill: 'rgba(190, 18, 60, 0.14)' },
-  { stroke: '#0f172a', fill: 'rgba(15, 23, 42, 0.12)' },
-] as const
+import { useScenarioStore } from '@/store/scenario-store'
+import {
+  buildScenarioRenderList,
+  getDraftStyle,
+  MUTED_COLOR,
+  type ScenarioRenderInfo,
+} from '@/scenarios/scenario-styles'
 
 type MetricDef = {
   key: string
@@ -51,11 +47,16 @@ function formatMetricValue(metricKey: string, impact: ImpactEstimate): string {
   }
 }
 
-type RadarSeries = {
+type RadarEntry = {
   id: string
   label: string
   impact: ImpactEstimate
-  colorIndex: number
+  stroke: string
+  fill: string
+  strokeWidth: number
+  opacity: number
+  dotRadius: number
+  isDraft: boolean
 }
 
 interface KPIRadarChartProps {
@@ -64,82 +65,80 @@ interface KPIRadarChartProps {
   activeScenarioId: string | null
 }
 
-function loadSelection(): string[] {
-  try {
-    const raw = localStorage.getItem(RADAR_SELECTION_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as string[]
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
 export function KPIRadarChart({ currentImpact, scenarios, activeScenarioId }: KPIRadarChartProps) {
-  const [selectedScenarioIds, setSelectedScenarioIds] = useState<string[]>(() => loadSelection())
+  const visibleScenarioIds = useScenarioStore((s) => s.visibleScenarioIds)
+  const comparedScenarioIds = useScenarioStore((s) => s.comparedScenarioIds)
 
-  const scenarioOptions = useMemo(
-    () => scenarios.filter((scenario) => scenario.impactSummary),
-    [scenarios]
+  const scenarioRenderList = useMemo<ScenarioRenderInfo[]>(
+    () =>
+      buildScenarioRenderList(
+        scenarios.map((s) => s.id),
+        comparedScenarioIds,
+        visibleScenarioIds
+      ),
+    [scenarios, comparedScenarioIds, visibleScenarioIds]
   )
 
-  useEffect(() => {
-    const validIds = new Set(scenarioOptions.map((scenario) => scenario.id))
-    setSelectedScenarioIds((prev) => {
-      const pruned = prev.filter((id) => validIds.has(id))
-      if (pruned.length > 0 || !activeScenarioId || !validIds.has(activeScenarioId)) {
-        return pruned
-      }
-      return [activeScenarioId]
-    })
-  }, [scenarioOptions, activeScenarioId])
+  const entries = useMemo<RadarEntry[]>(() => {
+    const result: RadarEntry[] = []
 
-  useEffect(() => {
-    localStorage.setItem(RADAR_SELECTION_KEY, JSON.stringify(selectedScenarioIds))
-  }, [selectedScenarioIds])
+    scenarioRenderList.forEach((info) => {
+      const scenario = scenarios.find((s) => s.id === info.id)
+      if (!scenario?.impactSummary) return
 
-  const series = useMemo<RadarSeries[]>(() => {
-    const fromCurrent = currentImpact
-      ? [
-          {
-            id: 'current',
-            label: 'Current draft',
-            impact: currentImpact,
-            colorIndex: 0,
-          },
-        ]
-      : []
+      const r = parseInt(info.color.slice(1, 3), 16)
+      const g = parseInt(info.color.slice(3, 5), 16)
+      const b = parseInt(info.color.slice(5, 7), 16)
 
-    const fromSaved = scenarioOptions
-      .filter((scenario) => selectedScenarioIds.includes(scenario.id) && scenario.impactSummary)
-      .map((scenario, idx) => ({
+      result.push({
         id: scenario.id,
         label: scenario.name,
-        impact: scenario.impactSummary as ImpactEstimate,
-        colorIndex: (idx + 1) % RADAR_COLORS.length,
-      }))
+        impact: scenario.impactSummary,
+        stroke: info.style.stroke,
+        fill: info.mode === 'muted'
+          ? `rgba(148, 163, 184, 0.04)`
+          : `rgba(${r}, ${g}, ${b}, 0.12)`,
+        strokeWidth: info.mode === 'muted' ? 0.5 : 2,
+        opacity: info.style.opacity,
+        dotRadius: info.mode === 'muted' ? 0 : 2,
+        isDraft: false,
+      })
+    })
 
-    return [...fromCurrent, ...fromSaved]
-  }, [currentImpact, scenarioOptions, selectedScenarioIds])
-
-  const normalizedSeries = useMemo(() => {
-    if (series.length === 0) {
-      return [] as Array<RadarSeries & { values: number[] }>
+    if (currentImpact) {
+      const draft = getDraftStyle()
+      result.push({
+        id: 'current',
+        label: 'Current draft',
+        impact: currentImpact,
+        stroke: draft.stroke,
+        fill: 'rgba(15, 23, 42, 0.08)',
+        strokeWidth: 2.5,
+        opacity: 0.85,
+        dotRadius: 3,
+        isDraft: true,
+      })
     }
 
+    return result
+  }, [currentImpact, scenarios, scenarioRenderList])
+
+  const normalizedEntries = useMemo(() => {
+    if (entries.length === 0) return [] as Array<RadarEntry & { values: number[] }>
+
     const maxPerMetric = METRICS.map((metric) =>
-      Math.max(...series.map((entry) => metric.getValue(entry.impact)), 0)
+      Math.max(...entries.map((e) => metric.getValue(e.impact)), 0)
     )
 
-    return series.map((entry) => ({
+    return entries.map((entry) => ({
       ...entry,
-      values: METRICS.map((metric, index) => {
-        const max = maxPerMetric[index]
+      values: METRICS.map((metric, i) => {
+        const max = maxPerMetric[i]
         if (max <= 0) return 0
         return Math.min(1, metric.getValue(entry.impact) / max)
       }),
     }))
-  }, [series])
+  }, [entries])
 
   const size = 248
   const center = size / 2
@@ -154,15 +153,11 @@ export function KPIRadarChart({ currentImpact, scenarios, activeScenarioId }: KP
 
   function polygonPoints(values: number[]): string {
     return values
-      .map((value, idx) => {
-        const [x, y] = pointFor(idx, value)
+      .map((v, idx) => {
+        const [x, y] = pointFor(idx, v)
         return `${x},${y}`
       })
       .join(' ')
-  }
-
-  function toggleScenario(id: string) {
-    setSelectedScenarioIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]))
   }
 
   return (
@@ -173,10 +168,12 @@ export function KPIRadarChart({ currentImpact, scenarios, activeScenarioId }: KP
             KPI Radar
           </div>
           <div className="text-[10px] text-slate-500 mt-0.5">
-            Persistent profile for current and saved scenarios
+            Compare draft vs visible/highlighted scenarios
           </div>
         </div>
-        <div className="text-[9px] text-slate-400 uppercase tracking-wide">{series.length} shown</div>
+        <div className="text-[9px] text-slate-400 uppercase tracking-wide">
+          {entries.length} shown
+        </div>
       </div>
 
       <div className="mx-auto w-full max-w-[248px]">
@@ -216,64 +213,57 @@ export function KPIRadarChart({ currentImpact, scenarios, activeScenarioId }: KP
             )
           })}
 
-          {normalizedSeries.map((entry) => {
-            const color = RADAR_COLORS[entry.colorIndex]
-            return (
-              <g key={entry.id}>
-                <polygon points={polygonPoints(entry.values)} fill={color.fill} stroke={color.stroke} strokeWidth={2}>
-                  <title>
-                    {`${entry.label}\n${METRICS.map((metric) => `${metric.label}: ${formatMetricValue(metric.key, entry.impact)}`).join('\n')}`}
-                  </title>
-                </polygon>
-                {entry.values.map((value, axisIndex) => {
+          {normalizedEntries.map((entry) => (
+            <g key={entry.id}>
+              <polygon
+                points={polygonPoints(entry.values)}
+                fill={entry.fill}
+                stroke={entry.stroke}
+                strokeWidth={entry.strokeWidth}
+                strokeOpacity={entry.opacity}
+                fillOpacity={entry.opacity}
+              >
+                <title>
+                  {`${entry.label}\n${METRICS.map((m) => `${m.label}: ${formatMetricValue(m.key, entry.impact)}`).join('\n')}`}
+                </title>
+              </polygon>
+              {entry.dotRadius > 0 &&
+                entry.values.map((value, axisIndex) => {
                   const [x, y] = pointFor(axisIndex, value)
                   const metric = METRICS[axisIndex]
                   return (
-                    <circle key={`${entry.id}-${axisIndex}`} cx={x} cy={y} r={2.5} fill={color.stroke}>
+                    <circle
+                      key={`${entry.id}-${axisIndex}`}
+                      cx={x}
+                      cy={y}
+                      r={entry.dotRadius}
+                      fill={entry.stroke}
+                      fillOpacity={entry.opacity}
+                    >
                       <title>{`${entry.label} - ${metric.label}: ${formatMetricValue(metric.key, entry.impact)}`}</title>
                     </circle>
                   )
                 })}
-              </g>
-            )
-          })}
+            </g>
+          ))}
         </svg>
       </div>
 
-      <div className="space-y-2">
-        <div className="flex flex-wrap gap-2">
-          {series.length === 0 ? (
-            <div className="text-[10px] text-slate-400">No impact data yet. Add placements or load a saved scenario.</div>
-          ) : (
-            series.map((entry) => {
-              const color = RADAR_COLORS[entry.colorIndex]
-              return (
-                <div key={entry.id} className="inline-flex items-center gap-1.5 text-[10px] text-slate-600">
-                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color.stroke }} />
-                  {entry.label}
-                </div>
-              )
-            })
-          )}
-        </div>
-
-        {scenarioOptions.length > 0 && (
-          <div className="space-y-1">
-            <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">Compare saved scenarios</div>
-            <div className="max-h-20 overflow-y-auto pr-1 space-y-1">
-              {scenarioOptions.map((scenario) => (
-                <label key={scenario.id} className="flex items-center gap-2 text-[10px] text-slate-600 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={selectedScenarioIds.includes(scenario.id)}
-                    onChange={() => toggleScenario(scenario.id)}
-                    className="h-3 w-3 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
-                  />
-                  <span className="truncate">{scenario.name}</span>
-                </label>
-              ))}
-            </div>
+      <div className="flex flex-wrap gap-2">
+        {entries.length === 0 ? (
+          <div className="text-[10px] text-slate-400">
+            No impact data yet. Add placements or toggle scenario visibility.
           </div>
+        ) : (
+          entries.map((entry) => (
+            <div key={entry.id} className="inline-flex items-center gap-1.5 text-[10px] text-slate-600">
+              <span
+                className="h-2 w-2 rounded-full"
+                style={{ backgroundColor: entry.stroke, opacity: entry.opacity }}
+              />
+              <span className={entry.isDraft ? 'font-bold' : ''}>{entry.label}</span>
+            </div>
+          ))
         )}
       </div>
     </div>

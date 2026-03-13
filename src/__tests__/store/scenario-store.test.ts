@@ -6,6 +6,8 @@ describe('Scenario Store', () => {
     useScenarioStore.setState({
       scenarios: [],
       activeScenarioId: null,
+      visibleScenarioIds: new Set(),
+      comparedScenarioIds: [],
       currentPlacements: [],
       currentImpact: null,
     })

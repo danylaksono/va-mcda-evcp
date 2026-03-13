@@ -80,10 +80,13 @@ export interface ImpactEstimate {
 export interface Scenario {
   id: string
   name: string
+  description?: string
   timestamp: number
   weights: Record<string, number>
   polarities?: Record<string, CriterionPolarity>
   method: MCDAMethod
+  activeCriteria?: string[]
+  ahpComparisons?: AHPComparison[]
   placements: EVCPPlacement[]
   impactSummary?: ImpactEstimate
 }

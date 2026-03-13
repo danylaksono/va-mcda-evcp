@@ -1,6 +1,12 @@
 import React, { useState, useMemo } from 'react'
 import { useMCDAStore } from '@/store/mcda-store'
+import { useScenarioStore } from '@/store/scenario-store'
 import { solveAHP } from '@/analysis/ahp-solver'
+import {
+  buildScenarioRenderList,
+  getDraftStyle,
+  type ScenarioRenderInfo,
+} from '@/scenarios/scenario-styles'
 
 const MIN_ZOOM = 0.45
 const MAX_ZOOM = 5
@@ -31,6 +37,10 @@ export function AHPComparison() {
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 })
   const [panState, setPanState] = useState<{ pointerId: number; pointerX: number; pointerY: number; baseX: number; baseY: number } | null>(null)
 
+  const scenarios = useScenarioStore((s) => s.scenarios)
+  const visibleScenarioIds = useScenarioStore((s) => s.visibleScenarioIds)
+  const comparedScenarioIds = useScenarioStore((s) => s.comparedScenarioIds)
+
   const activeCriteria = criteria.filter((c) => c.active)
   const requiredComparisons = Math.max(0, (activeCriteria.length * (activeCriteria.length - 1)) / 2)
   const completionRatio = requiredComparisons > 0 ? comparisons.length / requiredComparisons : 0
@@ -42,15 +52,34 @@ export function AHPComparison() {
   
   const currentWeights = liveMetrics.weights
 
-  // Mock alternative archetypes to show weight influence
-  const alternatives = useMemo(() => {
-    return [
-      { id: '1', name: 'High Demand', color: '#ef4444', scores: activeCriteria.reduce((acc, c) => ({...acc, [c.id]: Math.random() * 0.5 + (c.category === 'demand' ? 0.5 : 0)}), {} as Record<string, number>) },
-      { id: '2', name: 'Equity Focus', color: '#eab308', scores: activeCriteria.reduce((acc, c) => ({...acc, [c.id]: Math.random() * 0.5 + (c.category === 'equity' ? 0.5 : 0)}), {} as Record<string, number>) },
-      { id: '3', name: 'Balanced', color: '#10b981', scores: activeCriteria.reduce((acc, c) => ({...acc, [c.id]: Math.random() * 0.4 + 0.3}), {} as Record<string, number>) },
-      { id: '4', name: 'Infrastructure', color: '#6366f1', scores: activeCriteria.reduce((acc, c) => ({...acc, [c.id]: Math.random() * 0.5 + (c.category === 'infrastructure' ? 0.5 : 0)}), {} as Record<string, number>) }
-    ]
-  }, [activeCriteria.length]) // re-generate only if active criteria count changes
+  const scenarioRenderList = useMemo<ScenarioRenderInfo[]>(
+    () =>
+      buildScenarioRenderList(
+        scenarios.map((s) => s.id),
+        comparedScenarioIds,
+        visibleScenarioIds
+      ),
+    [scenarios, comparedScenarioIds, visibleScenarioIds]
+  )
+
+  const scenarioParticles = useMemo(() => {
+    return scenarioRenderList.map((info) => {
+      const scenario = scenarios.find((s) => s.id === info.id)
+      if (!scenario) return null
+      return {
+        id: info.id,
+        name: scenario.name,
+        color: info.style.stroke,
+        opacity: info.style.opacity,
+        radius: info.mode === 'highlighted' ? 6 : 4,
+        labelVisible: info.mode === 'highlighted',
+        scores: scenario.weights,
+      }
+    }).filter(Boolean) as Array<{
+      id: string; name: string; color: string; opacity: number;
+      radius: number; labelVisible: boolean; scores: Record<string, number>
+    }>
+  }, [scenarioRenderList, scenarios])
 
 
   function handleCellClick(c1: string, c2: string) {
@@ -232,12 +261,38 @@ export function AHPComparison() {
     })
   )
 
+  const draftParticle = useMemo(() => {
+    const draftStyle = getDraftStyle()
+    let tx = 0, ty = 0, tw = 0
+    activeCriteria.forEach((c) => {
+      const weight = currentWeights[c.id] || 0
+      const score = c.weight
+      const pull = weight * score
+      const pos = nodePositions.get(c.id)
+      if (pos) {
+        tx += pos.x * pull
+        ty += pos.y * pull
+        tw += pull
+      }
+    })
+    return {
+      id: 'draft',
+      name: 'Current',
+      color: draftStyle.stroke,
+      opacity: draftStyle.opacity,
+      radius: 8,
+      labelVisible: true,
+      x: tw === 0 ? center : tx / tw,
+      y: tw === 0 ? center : ty / tw,
+    }
+  }, [activeCriteria, currentWeights, nodePositions, center])
+
   const particlePositions = useMemo(() => {
-    return alternatives.map((alt) => {
+    return scenarioParticles.map((sp) => {
       let tx = 0, ty = 0, tw = 0
       activeCriteria.forEach((c) => {
         const weight = currentWeights[c.id] || 0
-        const score = alt.scores[c.id] || 0
+        const score = sp.scores[c.id] || 0
         const pull = weight * score
         const pos = nodePositions.get(c.id)
         if (pos) {
@@ -246,10 +301,10 @@ export function AHPComparison() {
           tw += pull
         }
       })
-      if (tw === 0) return { ...alt, x: center, y: center }
-      return { ...alt, x: tx / tw, y: ty / tw }
+      if (tw === 0) return { ...sp, x: center, y: center }
+      return { ...sp, x: tx / tw, y: ty / tw }
     })
-  }, [alternatives, activeCriteria, currentWeights, nodePositions, center])
+  }, [scenarioParticles, activeCriteria, currentWeights, nodePositions, center])
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
@@ -375,14 +430,37 @@ export function AHPComparison() {
               })}
             </g>
             <g id="particles">
-              {particlePositions.map((alt, i) => (
-                <g key={i} transform={`translate(${alt.x}, ${alt.y})`} className="transition-transform duration-500 ease-out pointer-events-none">
-                  <circle r={4.5} fill={alt.color} stroke="#fff" strokeWidth={1.2} style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))' }} />
-                  <text dy="-10" textAnchor="middle" className="text-[9px] font-bold fill-slate-700 shadow-sm">
-                    {alt.name}
-                  </text>
+              {particlePositions.map((sp) => (
+                <g key={sp.id} transform={`translate(${sp.x}, ${sp.y})`} className="transition-transform duration-500 ease-out pointer-events-none">
+                  <circle
+                    r={sp.radius}
+                    fill={sp.color}
+                    fillOpacity={sp.opacity}
+                    stroke="#fff"
+                    strokeWidth={sp.labelVisible ? 1.2 : 0.6}
+                    style={{ filter: sp.labelVisible ? 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))' : 'none' }}
+                  />
+                  {sp.labelVisible && (
+                    <text dy={-(sp.radius + 4)} textAnchor="middle" className="text-[8px] font-bold fill-slate-600">
+                      {sp.name}
+                    </text>
+                  )}
                 </g>
               ))}
+              {/* Draft particle (always on top) */}
+              <g transform={`translate(${draftParticle.x}, ${draftParticle.y})`} className="transition-transform duration-500 ease-out pointer-events-none">
+                <circle
+                  r={draftParticle.radius}
+                  fill={draftParticle.color}
+                  fillOpacity={draftParticle.opacity}
+                  stroke="#fff"
+                  strokeWidth={1.5}
+                  style={{ filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.25))' }}
+                />
+                <text dy={-(draftParticle.radius + 4)} textAnchor="middle" className="text-[9px] font-bold fill-slate-800">
+                  {draftParticle.name}
+                </text>
+              </g>
             </g>
             <g id="pucks">
               {comparisons.map((comp, idx) => {

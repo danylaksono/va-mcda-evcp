@@ -17,6 +17,7 @@ import { scoreToColor } from '@/utils/color-scales'
 import { ChargerConfig } from '../impact/ChargerConfig'
 import { SlidersHorizontal, Zap } from 'lucide-react'
 import type { EVCPPlacement, PlacementCellData } from '@/analysis/types'
+import { buildScenarioRenderList, MUTED_COLOR } from '@/scenarios/scenario-styles'
 
 interface MapViewProps {
   mcdaResults: Array<{
@@ -234,6 +235,9 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const setSimulationMode = useScenarioStore((s) => s.setSimulationMode)
   const selectedPlacementCell = useScenarioStore((s) => s.selectedPlacementCell)
   const setSelectedPlacementCell = useScenarioStore((s) => s.setSelectedPlacementCell)
+  const scenarios = useScenarioStore((s) => s.scenarios)
+  const visibleScenarioIds = useScenarioStore((s) => s.visibleScenarioIds)
+  const comparedScenarioIds = useScenarioStore((s) => s.comparedScenarioIds)
 
   const glyphLegendCriteria = useMemo(() => {
     const maxItems = glyphType === 'rose' ? 8 : 6
@@ -559,6 +563,47 @@ export function MapView({ mcdaResults }: MapViewProps) {
           'text-halo-width': 1,
         },
       })
+
+      map.addSource('scenario-markers', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+
+      map.addLayer(
+        {
+          id: 'scenario-markers-muted',
+          type: 'circle',
+          source: 'scenario-markers',
+          filter: ['==', ['get', 'mode'], 'muted'],
+          paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 3, 12, 5, 15, 6],
+            'circle-color': MUTED_COLOR,
+            'circle-opacity': 0.2,
+            'circle-stroke-width': 1,
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-opacity': 0.3,
+          },
+        },
+        'evcp-markers'
+      )
+
+      map.addLayer(
+        {
+          id: 'scenario-markers-highlighted',
+          type: 'circle',
+          source: 'scenario-markers',
+          filter: ['==', ['get', 'mode'], 'highlighted'],
+          paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 5, 12, 7, 15, 9],
+            'circle-color': ['get', 'color'],
+            'circle-opacity': 0.55,
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-opacity': 0.7,
+          },
+        },
+        'evcp-markers'
+      )
 
       // Use a canvas marker instead of an external image to avoid decoding errors
       const markerSize = 32
@@ -1297,6 +1342,54 @@ export function MapView({ mcdaResults }: MapViewProps) {
     if (!isMapReady) return
     syncEvcpMarkers(currentPlacements)
   }, [currentPlacements, isMapReady, syncEvcpMarkers])
+
+  const syncScenarioMarkers = useCallback(() => {
+    const map = mapRef.current
+    if (!map) return
+
+    const source = map.getSource('scenario-markers') as maplibregl.GeoJSONSource | undefined
+    if (!source) return
+
+    const renderList = buildScenarioRenderList(
+      scenarios.map((s) => s.id),
+      comparedScenarioIds,
+      visibleScenarioIds
+    )
+
+    const features = renderList.flatMap((info) => {
+      const scenario = scenarios.find((s) => s.id === info.id)
+      if (!scenario) return []
+      return scenario.placements.flatMap((p) => {
+        try {
+          const [lat, lng] = getH3Center(p.h3Cell)
+          return [
+            {
+              type: 'Feature' as const,
+              geometry: { type: 'Point' as const, coordinates: [lng, lat] },
+              properties: {
+                scenario_id: info.id,
+                scenario_name: scenario.name,
+                mode: info.mode,
+                color: info.color,
+                h3_cell: p.h3Cell,
+                charger_type: p.chargerType,
+                charger_count: p.chargerCount,
+              },
+            },
+          ]
+        } catch {
+          return []
+        }
+      })
+    })
+
+    source.setData({ type: 'FeatureCollection', features })
+  }, [scenarios, comparedScenarioIds, visibleScenarioIds])
+
+  useEffect(() => {
+    if (!isMapReady) return
+    syncScenarioMarkers()
+  }, [isMapReady, syncScenarioMarkers])
 
   // Re-apply marker data if the style reloads to avoid losing source data visibility.
   useEffect(() => {

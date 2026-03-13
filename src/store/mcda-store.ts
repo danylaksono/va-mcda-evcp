@@ -21,7 +21,9 @@ interface MCDAState {
   addComparison: (comparison: AHPComparison) => void
   removeComparison: (criterion1: string, criterion2: string) => void
   updateComparison: (criterion1: string, criterion2: string, ratio: number) => void
+  setComparisons: (comparisons: AHPComparison[]) => void
   clearComparisons: () => void
+  setActiveCriteria: (activeIds: string[]) => void
   applyAHPWeights: () => void
   resetWeights: () => void
   setComputing: (computing: boolean) => void
@@ -110,7 +112,18 @@ export const useMCDAStore = create<MCDAState>((set, get) => ({
     })
   },
 
+  setComparisons: (comparisons) => set({ comparisons, ahpMetrics: null }),
+
   clearComparisons: () => set({ comparisons: [], ahpMetrics: null }),
+
+  setActiveCriteria: (activeIds) => {
+    const activeSet = new Set(activeIds)
+    const updated = get().criteria.map((c) => ({
+      ...c,
+      active: activeSet.has(c.id),
+    }))
+    set({ criteria: updated })
+  },
 
   applyAHPWeights: () => {
     const { criteria, comparisons } = get()
