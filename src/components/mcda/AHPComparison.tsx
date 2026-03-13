@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { useMCDAStore } from '@/store/mcda-store'
 import { useScenarioStore } from '@/store/scenario-store'
 import { solveAHP } from '@/analysis/ahp-solver'
+import type { AHPComparison as AHPComparisonType } from '@/analysis/types'
 import {
   buildScenarioRenderList,
   getDraftStyle,
@@ -22,10 +23,8 @@ const AHP_SCALE_LABELS: Record<number, string> = {
 export function AHPComparison() {
   const criteria = useMCDAStore((s) => s.criteria)
   const comparisons = useMCDAStore((s) => s.comparisons)
-  const addComparison = useMCDAStore((s) => s.addComparison)
+  const setComparisons = useMCDAStore((s) => s.setComparisons)
   const updateComparison = useMCDAStore((s) => s.updateComparison)
-  const removeComparison = useMCDAStore((s) => s.removeComparison)
-  const clearComparisons = useMCDAStore((s) => s.clearComparisons)
   const applyAHPWeights = useMCDAStore((s) => s.applyAHPWeights)
   const ahpMetrics = useMCDAStore((s) => s.ahpMetrics)
 
@@ -36,6 +35,7 @@ export function AHPComparison() {
   const [editingValue, setEditingValue] = useState('1')
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 })
   const [panState, setPanState] = useState<{ pointerId: number; pointerX: number; pointerY: number; baseX: number; baseY: number } | null>(null)
+  const [hideDefaults, setHideDefaults] = useState(true)
 
   const scenarios = useScenarioStore((s) => s.scenarios)
   const visibleScenarioIds = useScenarioStore((s) => s.visibleScenarioIds)
@@ -45,6 +45,60 @@ export function AHPComparison() {
   const requiredComparisons = Math.max(0, (activeCriteria.length * (activeCriteria.length - 1)) / 2)
   const completionRatio = requiredComparisons > 0 ? comparisons.length / requiredComparisons : 0
   const completionPct = Math.min(100, completionRatio * 100)
+
+  const activeCriteriaKey = activeCriteria.map((c) => c.id).sort().join(',')
+
+  useEffect(() => {
+    const ids = activeCriteriaKey.split(',').filter(Boolean)
+    if (ids.length < 2) return
+
+    const current = useMCDAStore.getState().comparisons
+    const expected = (ids.length * (ids.length - 1)) / 2
+
+    if (current.length === expected) {
+      const activeSet = new Set(ids)
+      const allValid = current.every(
+        (c) => activeSet.has(c.criterion1) && activeSet.has(c.criterion2)
+      )
+      if (allValid) return
+    }
+
+    const allPairs: AHPComparisonType[] = []
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        const c1 = ids[i]
+        const c2 = ids[j]
+        const existing = current.find(
+          (comp) =>
+            (comp.criterion1 === c1 && comp.criterion2 === c2) ||
+            (comp.criterion1 === c2 && comp.criterion2 === c1)
+        )
+        allPairs.push({
+          criterion1: c1,
+          criterion2: c2,
+          ratio: existing
+            ? existing.criterion1 === c1 ? existing.ratio : 1 / existing.ratio
+            : 1,
+        })
+      }
+    }
+
+    setComparisons(allPairs)
+  }, [activeCriteriaKey, comparisons.length, setComparisons])
+
+  const modifiedCount = comparisons.filter((c) => Math.abs(c.ratio - 1) > 1e-6).length
+
+  function isCompVisible(comp: AHPComparisonType) {
+    if (!hideDefaults) return true
+    if (Math.abs(comp.ratio - 1) > 1e-6) return true
+    if (
+      selectedPair &&
+      ((selectedPair[0] === comp.criterion1 && selectedPair[1] === comp.criterion2) ||
+        (selectedPair[0] === comp.criterion2 && selectedPair[1] === comp.criterion1))
+    )
+      return true
+    return false
+  }
 
   const liveMetrics = useMemo(() => {
     return solveAHP(criteria, comparisons)
@@ -84,14 +138,6 @@ export function AHPComparison() {
 
   function handleCellClick(c1: string, c2: string) {
     if (c1 === c2) return
-    const existing = comparisons.find(
-      (comp) =>
-        (comp.criterion1 === c1 && comp.criterion2 === c2) ||
-        (comp.criterion1 === c2 && comp.criterion2 === c1)
-    )
-    if (!existing) {
-      addComparison({ criterion1: c1, criterion2: c2, ratio: 1 })
-    }
     setSelectedPair([c1, c2])
   }
 
@@ -126,6 +172,18 @@ export function AHPComparison() {
     setPendingNode(null)
     setSelectedPair(null)
     setEditingCell(null)
+  }
+
+  function handleResetComparisons() {
+    const ids = activeCriteria.map((c) => c.id)
+    const allPairs: AHPComparisonType[] = []
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        allPairs.push({ criterion1: ids[i], criterion2: ids[j], ratio: 1 })
+      }
+    }
+    setComparisons(allPairs)
+    setSelectedPair(null)
   }
 
   function startCellEdit(rowId: string, colId: string) {
@@ -370,6 +428,7 @@ export function AHPComparison() {
             <g transform={`translate(${view.x} ${view.y}) scale(${view.scale})`}>
             <g id="links">
               {comparisons.map((comp, idx) => {
+                if (!isCompVisible(comp)) return null
                 const p1 = nodePositions.get(comp.criterion1)
                 const p2 = nodePositions.get(comp.criterion2)
                 if (!p1 || !p2) return null
@@ -379,6 +438,8 @@ export function AHPComparison() {
                   ((selectedPair[0] === comp.criterion1 && selectedPair[1] === comp.criterion2) ||
                     (selectedPair[0] === comp.criterion2 && selectedPair[1] === comp.criterion1))
 
+                const isDefault = Math.abs(comp.ratio - 1) <= 1e-6
+
                 return (
                   <g key={idx}>
                     <line
@@ -386,10 +447,10 @@ export function AHPComparison() {
                       y1={p1.y}
                       x2={p2.x}
                       y2={p2.y}
-                      stroke={isSelected ? '#3b82f6' : '#cbd5e1'}
+                      stroke={isSelected ? '#3b82f6' : isDefault ? '#e2e8f0' : '#cbd5e1'}
                       strokeWidth={isSelected ? 2.5 : 1.75}
                       className="transition-all duration-300"
-                      strokeDasharray={isSelected ? 'none' : '4'}
+                      strokeDasharray={isSelected ? 'none' : isDefault ? '2 4' : '4'}
                     />
                   </g>
                 )
@@ -464,6 +525,7 @@ export function AHPComparison() {
             </g>
             <g id="pucks">
               {comparisons.map((comp, idx) => {
+                if (!isCompVisible(comp)) return null
                 const p1 = nodePositions.get(comp.criterion1)
                 const p2 = nodePositions.get(comp.criterion2)
                 if (!p1 || !p2) return null
@@ -525,14 +587,28 @@ export function AHPComparison() {
             </g>
           </svg>
           <div className="absolute top-2 right-2 flex flex-col items-end gap-1">
+          <button
+            type="button"
+            onClick={() => setHideDefaults((v) => !v)}
+            className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-semibold shadow-sm transition-colors ${
+              hideDefaults
+                ? 'border-brand-300 bg-brand-50 text-brand-700'
+                : 'border-slate-200 bg-white/90 text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <span className={`inline-block h-1.5 w-1.5 rounded-full ${hideDefaults ? 'bg-brand-500' : 'bg-slate-300'}`} />
+            {hideDefaults
+              ? `Showing ${modifiedCount} modified`
+              : `Showing all ${comparisons.length}`}
+          </button>
           {pendingNode && (
             <div className="text-[10px] bg-brand-100 text-brand-700 px-2 py-1 rounded shadow-sm">
-              Select another node to compare
+              Click another node to select that pair
             </div>
           )}
           {!pendingNode && comparisons.length > 0 && (
              <div className="text-[10px] text-slate-500 bg-white/85 px-2 py-1 rounded shadow-sm">
-               Drag the blue puck to adjust weight
+               Drag any puck to adjust the comparison ratio
              </div>
           )}
           {/* <div className="text-[9px] text-slate-500 bg-white/85 px-2 py-1 rounded shadow-sm">
@@ -725,8 +801,8 @@ export function AHPComparison() {
         >
           Apply AHP Weights
         </button>
-        <button onClick={clearComparisons} className="btn-secondary text-xs">
-          Clear
+        <button onClick={handleResetComparisons} className="btn-secondary text-xs">
+          Reset
         </button>
       </div>
     </div>

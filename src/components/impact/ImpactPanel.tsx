@@ -5,19 +5,8 @@ import { CHARGER_SPECS } from '@/analysis/types'
 import type { PlacementCellData, EVCPPlacement } from '@/analysis/types'
 import { KPICards } from './KPICards'
 import { KPIRadarChart } from './KPIRadarChart'
-import { AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, MapPin, Trash2, Zap } from 'lucide-react'
 
-/**
- * Maps MCDA criterion data captured at placement time to the CellData
- * interface expected by the impact model.
- *
- * Field mapping (criterion ID → CellData key):
- *   pop_density (raw)        → popDensity       (people/km², used for demand & population estimates)
- *   car_ownership (norm 0–1) → carOwnership     (proxy for local car ownership intensity)
- *   deprivation (raw)        → deprivation      (stored as deprivation score, not used in energy calcs)
- *   grid_capacity (raw)      → gridCapacity     (already 0–1 normalised demand headroom)
- *   evcp_distance (raw)      → existingEVCPDistance (driving time/distance to nearest EVCP)
- */
 function toCellData(data: PlacementCellData) {
   const { raw, normalized } = data
   return {
@@ -35,6 +24,20 @@ function hasRequiredFields(data: PlacementCellData): boolean {
     typeof data.raw.grid_capacity === 'number' &&
     (typeof data.normalized.car_ownership === 'number' || typeof data.raw.car_ownership === 'number')
   )
+}
+
+function placementLabel(p: EVCPPlacement): { primary: string; secondary?: string } {
+  const lsoaName = p.cellData?.metadata?.lsoa21nm
+  const lsoaCode = p.cellData?.metadata?.lsoa21cd ?? p.lsoaCode
+  const borough = p.cellData?.metadata?.borough_name
+
+  if (lsoaName) {
+    return { primary: lsoaName, secondary: borough ?? lsoaCode ?? undefined }
+  }
+  if (lsoaCode) {
+    return { primary: lsoaCode, secondary: borough ?? undefined }
+  }
+  return { primary: 'Unknown location', secondary: undefined }
 }
 
 function LSOABreakdownSection({ computable }: { computable: EVCPPlacement[] }) {
@@ -71,10 +74,10 @@ function LSOABreakdownSection({ computable }: { computable: EVCPPlacement[] }) {
   if (breakdown.length < 2) return null
 
   return (
-    <div className="border border-slate-100 rounded-lg overflow-hidden">
+    <div className="border border-slate-100 rounded-xl overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between px-3 py-2 bg-slate-50 hover:bg-slate-100 transition-colors"
+        className="w-full flex items-center justify-between px-3 py-2 bg-slate-50/80 hover:bg-slate-100 transition-colors"
       >
         <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
           Per-LSOA Breakdown ({breakdown.length})
@@ -87,7 +90,12 @@ function LSOABreakdownSection({ computable }: { computable: EVCPPlacement[] }) {
             <div key={b.code} className="px-3 py-2">
               <div className="flex items-center justify-between">
                 <div className="min-w-0">
-                  <div className="text-[10px] font-bold text-slate-700 truncate">{b.code}</div>
+                  <div className="text-[10px] font-bold text-slate-700 truncate">
+                    {b.name || b.code}
+                  </div>
+                  {b.name && (
+                    <div className="text-[9px] text-slate-400">{b.code}</div>
+                  )}
                   {b.borough && <div className="text-[9px] text-slate-400">{b.borough}</div>}
                 </div>
                 <div className="text-right flex-shrink-0 ml-2">
@@ -147,91 +155,98 @@ export function ImpactPanel() {
     setCurrentImpact(aggregateImpacts(impacts))
   }, [currentPlacements, computable, setCurrentImpact])
 
+  const totalChargers = currentPlacements.reduce((s, p) => s + p.chargerCount, 0)
+
   return (
-    <div className="p-4 space-y-4">
-      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-        Impact Simulation
+    <div className="p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+          <Zap className="h-3.5 w-3.5" strokeWidth={2.2} />
+          Impact Simulation
+        </div>
+        {currentPlacements.length > 0 && (
+          <div className="text-[9px] text-slate-400 tabular-nums">
+            {currentPlacements.length} site{currentPlacements.length !== 1 ? 's' : ''} · {totalChargers} charger{totalChargers !== 1 ? 's' : ''}
+          </div>
+        )}
       </div>
 
       {currentPlacements.length === 0 ? (
-        <div className="text-center py-8">
-          <div className="text-3xl mb-2 opacity-30">📍</div>
-          <div className="text-xs text-slate-400">
-            Click on the map to place EVCP chargers
+        <div className="text-center py-6 border border-dashed border-slate-200 rounded-xl">
+          <MapPin className="h-5 w-5 text-slate-300 mx-auto mb-1.5" strokeWidth={1.5} />
+          <div className="text-[11px] text-slate-400 font-medium">
+            No chargers placed yet
           </div>
-          <div className="text-[10px] text-slate-300 mt-1">
-            Impact estimates will appear here
+          <div className="text-[10px] text-slate-300 mt-0.5">
+            Enable simulation mode and click on the map to place EVCP chargers
           </div>
         </div>
       ) : (
         <>
-          {/* Warning for placements without spatial data */}
           {missing.length > 0 && (
-            <div className="flex items-start gap-2 p-2.5 bg-amber-50 border border-amber-200 rounded-lg">
+            <div className="flex items-start gap-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
               <AlertTriangle className="h-3.5 w-3.5 text-amber-500 mt-0.5 flex-shrink-0" />
-              <div>
-                <div className="text-[10px] font-bold text-amber-700">
-                  {missing.length} placement{missing.length > 1 ? 's' : ''} missing spatial data
-                </div>
-                <div className="text-[10px] text-amber-600 mt-0.5">
-                  {computable.length > 0
-                    ? 'Impact estimates are based only on placements with data. Remove and re-place the affected chargers to include them.'
-                    : 'No impact can be calculated. Remove and re-place chargers to capture spatial data.'}
-                </div>
+              <div className="text-[10px] text-amber-700">
+                <span className="font-bold">{missing.length}</span> placement{missing.length > 1 ? 's' : ''} missing spatial data
+                {computable.length > 0 && ' — excluded from estimates'}
               </div>
             </div>
           )}
 
           {/* Placement List */}
-          <div className="space-y-1.5">
+          <div className="space-y-1">
             {currentPlacements.map((p) => {
               const hasCellData = p.cellData && hasRequiredFields(p.cellData)
+              const label = placementLabel(p)
+              const spec = CHARGER_SPECS[p.chargerType]
               return (
                 <div
                   key={p.h3Cell}
-                  className={`flex items-center justify-between p-2 rounded-lg border ${
+                  className={`group flex items-center gap-2 p-2 rounded-xl border transition-colors ${
                     hasCellData
-                      ? 'bg-slate-50 border-slate-100'
+                      ? 'bg-white border-slate-100 hover:border-slate-200'
                       : 'bg-amber-50/50 border-amber-200/50'
                   }`}
                 >
-                  <div className="min-w-0">
-                    <div className="text-[10px] font-mono text-slate-500 truncate max-w-[180px]">
-                      {p.h3Cell}
+                  <div
+                    className={`flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-bold ${
+                      hasCellData ? 'bg-brand-50 text-brand-600' : 'bg-amber-100 text-amber-600'
+                    }`}
+                  >
+                    {p.chargerCount}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[11px] font-semibold text-slate-700 truncate">
+                      {label.primary}
                     </div>
-                    <div className="text-[10px] font-bold text-slate-700">
-                      {p.chargerCount} × {CHARGER_SPECS[p.chargerType].label}
+                    <div className="flex items-center gap-1.5 text-[9px] text-slate-400">
+                      <span>{spec.label}</span>
+                      {label.secondary && (
+                        <>
+                          <span className="opacity-40">·</span>
+                          <span className="truncate">{label.secondary}</span>
+                        </>
+                      )}
                     </div>
-                    {p.lsoaCode && (
-                      <div className="text-[9px] text-slate-400 mt-0.5">
-                        LSOA: {p.lsoaCode}
-                      </div>
-                    )}
-                    {!hasCellData && (
-                      <div className="text-[9px] text-amber-600 font-medium mt-0.5">
-                        No spatial data
-                      </div>
-                    )}
                   </div>
                   <button
                     onClick={() => removePlacement(p.h3Cell)}
-                    className="text-slate-400 hover:text-red-500 text-xs font-bold px-1"
+                    className="flex-shrink-0 p-1 rounded-md text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+                    title="Remove placement"
                   >
-                    ×
+                    <Trash2 className="h-3 w-3" strokeWidth={2.2} />
                   </button>
                 </div>
               )
             })}
           </div>
 
-          {/* Per-LSOA Breakdown */}
           <LSOABreakdownSection computable={computable} />
 
-          {/* Impact KPIs */}
           {currentImpact && <KPICards impact={currentImpact} />}
 
           {computable.length > 0 && !currentImpact && (
-            <div className="text-center py-4">
+            <div className="text-center py-3">
               <div className="text-[10px] text-slate-400">Computing impact...</div>
             </div>
           )}

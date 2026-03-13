@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useMemo, useState } from 'react'
 import * as d3 from 'd3'
-import { TrendingUp, Search, Zap, Leaf } from 'lucide-react'
+import { TrendingUp, Search, Zap, Leaf, Info } from 'lucide-react'
 import { useDFESStore, type DFESMetric, type DFESSeries } from '@/store/dfes-store'
 import { useDFESData, type DFESScope } from '@/hooks/useDFESData'
 import { useScenarioStore } from '@/store/scenario-store'
@@ -34,7 +34,7 @@ const METRIC_LABELS: Record<DFESMetric, string> = {
 type DFESScopeLevel = 'network' | 'lsoa' | 'borough'
 
 const SCOPE_LABELS: Record<DFESScopeLevel, string> = {
-  network: 'All UKPN',
+  network: 'Greater London Area',
   lsoa: 'LSOA',
   borough: 'Borough',
 }
@@ -70,6 +70,55 @@ function metricCapLabel(metric: DFESMetric): string {
 interface LSOAOption {
   code: string
   name: string
+}
+
+function DFESInfoTooltip() {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handleOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleOutside)
+    return () => document.removeEventListener('mousedown', handleOutside)
+  }, [open])
+
+  return (
+    <div ref={ref} className="relative inline-flex">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          setOpen(!open)
+        }}
+        className="p-1 rounded-full text-slate-300 hover:text-slate-500 hover:bg-slate-100 transition-colors"
+        aria-label="About this chart"
+      >
+        <Info className="h-3 w-3" strokeWidth={1.8} />
+      </button>
+      {open && (
+        <div className="absolute z-50 top-full left-1/2 -translate-x-1/2 mt-2 w-64 p-2.5 bg-slate-800 text-slate-300 text-[10px] leading-relaxed rounded-lg shadow-xl font-normal">
+          <div className="font-small mb-1 text-slate-400 uppercase tracking-wider text-[8px]">
+            About this chart
+          </div>
+          <p className="mb-1.5">
+            UKPN DFES demand projections for low-carbon technologies. Each line is a pathway (alternative adoption scenario).
+          </p>
+          <p className="mb-1.5">
+            The <span className="text-orange-300">orange dashed line</span> shows estimated supply from your placed chargers. <span className="text-emerald-400">Green</span> = demand met, <span className="text-red-300">red</span> = unmet.
+          </p>
+          <p className="text-slate-500 text-[9px]">
+            Scope: All UKPN → Borough → LSOA via map or search.
+          </p>
+          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-[-5px] w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent border-b-[5px] border-b-slate-800" />
+        </div>
+      )}
+    </div>
+  )
 }
 
 interface DFESTimeseriesProps {
@@ -655,7 +704,10 @@ export function DFESTimeseries({ selectedLSOA: mapSelectedLSOA, selectedLSOAName
             <TrendingUp className="h-5 w-5" />
           </div>
           <div className="min-w-0">
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-1">DFES Projections</div>
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-1 flex items-center gap-1">
+              DFES Projections
+              <DFESInfoTooltip />
+            </div>
             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 leading-tight">
               {scopeLevel === 'lsoa' && (activeSelectedLSOAName || activeSelectedLSOA)}
               {scopeLevel === 'borough' && activeBoroughName}
@@ -797,7 +849,7 @@ export function DFESTimeseries({ selectedLSOA: mapSelectedLSOA, selectedLSOAName
         </div>
       </div>
 
-      <div className="relative min-h-[320px] bg-slate-50/30 rounded-2xl border border-slate-100 p-4 transition-all overflow-hidden flex flex-col">
+      <div className="relative min-h-[320px] bg-slate-50/30 rounded-2xl border border-slate-100 p-1 transition-all overflow-hidden flex flex-col">
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center bg-white/60 backdrop-blur-[2px] z-10">
             <div className="flex flex-col items-center gap-3">
