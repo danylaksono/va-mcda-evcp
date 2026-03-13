@@ -894,10 +894,10 @@ export function MapView({ mcdaResults }: MapViewProps) {
     }
   }, [buildChargepointPopupHtml, comparisonGlyph, isMapReady, isSimulationMode, selectedPlacementCell, setSelectedPlacementCell])
 
-  // Update H3 grid when MCDA results change
+  // Update H3 grid when MCDA results change or map becomes ready.
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !map.isStyleLoaded()) return
+    if (!map || !isMapReady || !map.isStyleLoaded()) return
 
     const source = map.getSource('h3-grid') as maplibregl.GeoJSONSource
     if (!source) return
@@ -931,7 +931,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
     }
 
     source.setData(geojson)
-  }, [mcdaResults])
+  }, [mcdaResults, isMapReady])
 
   // Sync polygon visibility, overlays, and opacity.
   useEffect(() => {
