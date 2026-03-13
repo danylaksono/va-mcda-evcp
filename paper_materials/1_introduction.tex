@@ -1,0 +1,34 @@
+% 1_introduction.tex
+
+\section{Introduction}
+\label{sec:introduction}
+
+The transition to electric mobility is a central pillar of urban decarbonisation strategies worldwide. In the United Kingdom, the government has committed to ending the sale of new petrol and diesel vehicles by 2035, placing significant pressure on local authorities and network operators to expand public electric vehicle charging point (EVCP) infrastructure at pace~\cite{tfl2025evstrategy}. London alone targets over 40,000 public charge points by 2030, yet as of early 2025 only a fraction of that target has been realised, with substantial geographic disparities between boroughs. The siting of new EVCP infrastructure is a complex planning problem: candidate locations must balance competing criteria including population density, existing charging coverage, electricity grid capacity, traffic demand, accessibility to services, and socio-economic equity~\cite{banegas2023systematic,kaya2020evcs}.
+
+Multi-criteria decision analysis (MCDA) provides a principled framework for evaluating alternatives against multiple, often conflicting, objectives~\cite{malczewski2015gismcda}. When combined with geographic information systems (GIS), MCDA methods such as the Weighted Sum Model (WSM), Weighted Product Model (WPM), and TOPSIS~\cite{hwang1981topsis} enable spatially explicit suitability assessments that rank candidate locations based on user-defined priorities~\cite{malczewski1999gis}. The Analytic Hierarchy Process (AHP)~\cite{saaty1980ahp} offers a structured elicitation procedure for deriving criterion weights from pairwise comparisons, improving the transparency and consistency of weight assignment.
+
+Despite the maturity of these analytical methods, their application in infrastructure planning typically follows a static, batch-oriented workflow: analysts define weights, execute a GIS model, inspect the output, and iterate by adjusting parameters and re-running the pipeline. This process is opaque to non-technical stakeholders, obscures the sensitivity of results to weight choices, and provides no mechanism for evaluating the downstream consequences of siting decisions---such as the energy delivered, carbon saved, or grid stress induced by a proposed deployment~\cite{andrienko2007geovisual,jankowski2001gis}.
+
+Visual analytics offers an alternative paradigm that combines computational analysis with interactive visual representations, enabling analysts to steer analytical processes, explore parameter spaces, and develop insight through direct engagement with data~\cite{keim2008visual}. The visual analytics mantra---\emph{analyse first, show the important, zoom, filter, analyse further, details on demand}---provides a design framework well suited to the iterative, exploratory nature of infrastructure planning~\cite{shneiderman1996eyes}. However, existing visual analytics systems for spatial MCDA remain limited in two respects. First, most focus exclusively on the site selection phase and do not integrate impact estimation or scenario simulation. Second, few operate entirely client-side, instead relying on server infrastructure that constrains deployment flexibility and introduces latency in interactive weight exploration.
+
+In this paper, we present a visual analytics platform that addresses both limitations. The system integrates three analytical stages within a coordinated multiple-view interface:
+
+\begin{enumerate}[nosep]
+    \item \textbf{Multi-criteria suitability analysis}: interactive weight adjustment (via direct manipulation or AHP pairwise comparison) with real-time MCDA scoring across approximately 118,000 H3 hexagonal cells using three complementary methods (WSM, WPM, TOPSIS).
+
+    \item \textbf{What-if impact simulation}: a lightweight analytical model that estimates energy delivery, carbon reduction, grid headroom impact, population coverage, and financial indicators for proposed charger deployments at user-selected locations.
+
+    \item \textbf{Temporal contextualisation}: overlay of scenario-level impact estimates on UK Power Networks' Distribution Future Energy Scenarios (DFES) demand projections, revealing the year at which proposed infrastructure becomes insufficient under different demand pathways.
+\end{enumerate}
+
+The entire analytical pipeline runs client-side in a DuckDB-WASM instance, processing Parquet-encoded spatial data without server infrastructure. This architecture enables interactive response times during weight exploration while supporting deployment as a static web application.
+
+We demonstrate the platform through a case study of EVCP siting in Greater London, using nine heterogeneous open datasets spanning census demographics, transport emissions, electricity network capacity, accessibility indices, and existing charger locations. The case study illustrates a complete planning workflow: a planner adjusts criterion weights, explores suitability patterns on the map via choropleth and multi-variate glyph encodings, places candidate chargers, evaluates their impact, examines how the deployment performs against future demand trajectories, and compares alternative scenarios.
+
+The contributions of this work are:
+
+\begin{itemize}[nosep]
+    \item A visual analytics design pattern that integrates MCDA site selection, what-if impact simulation, and temporal scenario contextualisation within a coordinated multiple-view architecture.
+    \item A client-side analytical pipeline using DuckDB-WASM and H3 hexagonal indexing that enables real-time MCDA computation over large spatial datasets without server infrastructure.
+    \item A demonstration of the approach through a real-world EVCP planning case study in Greater London, grounded in heterogeneous open datasets.
+\end{itemize}

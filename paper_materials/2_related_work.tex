@@ -1,0 +1,42 @@
+% 2_related_work.tex
+
+\section{Related Work}
+\label{sec:related-work}
+
+This work draws on three research areas: visual analytics for spatial decision support, multi-criteria decision analysis in GIS, and methodologies for electric vehicle charging infrastructure siting. We review each area and position our contribution relative to existing approaches.
+
+%--------------------------------------------------------------
+\subsection{Visual Analytics for Spatial Decision Support}
+\label{sec:rw-va}
+
+Visual analytics combines automated analysis with interactive visual representations to support analytical reasoning over complex data~\cite{keim2008visual}. In the spatial domain, Andrienko et al.~\cite{andrienko2007geovisual} established a research agenda for geovisual analytics that emphasises the synergy between computational techniques and human analytical capabilities, arguing that interactive exploration of spatial patterns, relationships, and trends is essential for informed decision-making.
+
+Coordinated multiple views (CMV) are a foundational design pattern in visual analytics, enabling users to examine data through multiple linked representations~\cite{roberts2007coordinated}. In spatial decision support, CMV architectures typically coordinate a map view with statistical summaries, parameter controls, and diagnostic displays, allowing analysts to observe how changes in one dimension propagate across others. Shneiderman's information-seeking mantra---\emph{overview first, zoom and filter, details on demand}~\cite{shneiderman1996eyes}---provides a complementary interaction framework that guides the progressive disclosure of spatial information.
+
+Several systems have applied visual analytics principles to spatial planning problems. Jankowski and Nyerges~\cite{jankowski2001gis} developed GIS-based collaborative decision support tools that combine spatial data with group deliberation processes. Rinner and Malczewski~\cite{rinner2002owa} demonstrated web-enabled spatial decision analysis using Ordered Weighted Averaging operators with interactive map visualisation. More recent work has explored visual analytics for scenario planning~\cite{andrienko2003exploratory} and what-if analysis in infrastructure contexts, though few systems integrate site selection with downstream impact estimation in a single interactive environment.
+
+Our platform extends this line of work by coupling multi-criteria spatial analysis with a what-if simulation layer and temporal scenario contextualisation, all within a coordinated multiple-view interface that operates entirely client-side.
+
+%--------------------------------------------------------------
+\subsection{GIS-Based Multi-Criteria Decision Analysis}
+\label{sec:rw-mcda}
+
+The integration of MCDA with GIS has been extensively studied over the past three decades. Malczewski's foundational work~\cite{malczewski1999gis} established the conceptual framework for combining spatial data with multi-criteria evaluation methods, while Malczewski and Rinner~\cite{malczewski2015gismcda} provided a comprehensive treatment of GIS-MCDA at an advanced level, covering decision models, value scaling, criterion weighting, and combination rules.
+
+Among weighting methods, the Analytic Hierarchy Process (AHP)~\cite{saaty1980ahp} remains widely used for its structured elicitation of preferences through pairwise comparison. AHP produces a consistent weight vector from a reciprocal comparison matrix and provides a built-in consistency check (the Consistency Ratio), making it suitable for participatory settings where decision-makers need guidance on the coherence of their judgements. Several GIS-MCDA systems have incorporated AHP for weight derivation, though typically as an offline preprocessing step rather than as an interactive, integrated component~\cite{priefer2022evcs,kaya2020evcs}.
+
+Aggregation methods vary in their treatment of criteria trade-offs. The Weighted Sum Model (WSM) is the most common, offering full compensability: a high score on one criterion can compensate for a low score on another. The Weighted Product Model (WPM) uses multiplicative aggregation, which penalises alternatives with very low values on any criterion~\cite{malczewski2015gismcda}. TOPSIS~\cite{hwang1981topsis} ranks alternatives by their simultaneous distance to an ideal best and ideal worst solution, providing a geometric perspective on trade-off structure. Offering all three methods within a single interactive environment enables analysts to assess the robustness of rankings to methodological choice---a form of sensitivity analysis rarely available in batch-oriented GIS-MCDA workflows.
+
+Our system integrates AHP weight elicitation as an interactive component within the dashboard, enabling real-time pairwise comparison alongside direct weight manipulation, and supports all three aggregation methods with immediate visual feedback.
+
+%--------------------------------------------------------------
+\subsection{Electric Vehicle Charging Infrastructure Siting}
+\label{sec:rw-evcp}
+
+The siting of electric vehicle charging stations has attracted growing research attention as nations accelerate the transition to electric mobility. Banegas and Mamkhezri~\cite{banegas2023systematic} conducted a systematic review of GIS-based methods and criteria for EVCS site selection, examining 52 studies published between 2010 and 2021. They identified geographic and demographic variables as the most frequently used factors and noted that map algebra and overlay methods dominate the analytical approaches. Their review categorised siting criteria into six groups: geographic, energy, charging station attributes, EV characteristics, transportation and traffic, economic, socio-demographic, and environmental factors.
+
+Kaya et al.~\cite{kaya2020evcs} applied AHP combined with PROMETHEE and VIKOR methods using 19 parameters organised into economic, geographical, energy, social, and transportation categories. Priefer and Steiger~\cite{priefer2022evcs} used AHP with GIS overlay for suitability analysis, demonstrating how pairwise comparison can factorise weight assignments for EVCS parameters including accessibility, proximity to users, environmental impact, and power grid capacity.
+
+A consistent finding across this literature is that EVCS siting is inherently multi-criteria and context-dependent: the relative importance of demand indicators, infrastructure constraints, equity considerations, and environmental factors varies by planning context and stakeholder priorities~\cite{banegas2023systematic}. This observation motivates the interactive weight exploration approach adopted in our platform, where planners can adjust criterion priorities and immediately observe the spatial consequences.
+
+However, existing EVCS siting studies focus almost exclusively on identifying suitable locations. They do not evaluate the downstream impacts of proposed deployments---such as energy delivered, carbon reduction potential, or grid stress---nor do they contextualise siting decisions against forward-looking demand projections. Our work addresses this gap by integrating site selection with a lightweight impact estimation model and temporal scenario analysis through Distribution Future Energy Scenarios (DFES).

@@ -1,0 +1,169 @@
+% 4_system_design.tex
+
+\section{Visual Analytics Design}
+\label{sec:vis-design}
+
+The dashboard follows a coordinated multiple view (CMV) architecture~\cite{roberts2007coordinated} in which spatial, analytical, and temporal perspectives on EVCP siting are tightly linked through shared state. The design is guided by the visual analytics mantra~\cite{keim2008visual}---\emph{analyse first, show the important, zoom, filter, analyse further, details on demand}---and draws on established principles for multi-criteria spatial decision support~\cite{andrienko2007geovisual,jankowski2001gis}.
+
+%--------------------------------------------------------------
+\subsection{Dashboard Layout}
+\label{sec:layout}
+
+The interface is organised into three coordinated panels (Figure~\ref{fig:dashboard-layout}):
+
+\begin{enumerate}[nosep]
+    \item \textbf{Weight Laboratory} (left panel): interactive controls for MCDA method selection, criterion weighting via parallel coordinates, pairwise AHP comparison, and a weight diagnostics view.
+    \item \textbf{Spatial View} (centre panel): a web map displaying H3 hexagonal choropleth and glyph overlays, with a DFES timeseries panel anchored below.
+    \item \textbf{Impact Panel} (right panel): scenario placement list, eight KPI cards, a radar chart for scenario comparison, and a per-LSOA breakdown of aggregated impacts.
+\end{enumerate}
+
+\noindent All panels share state through a reactive store architecture (Zustand), ensuring that weight changes, map interactions, and scenario edits propagate immediately across views without explicit event wiring.
+
+\begin{figure}[htbp]
+    \centering
+    % PLACEHOLDER: Screenshot of the full dashboard showing all three panels
+    \fbox{\parbox{0.95\columnwidth}{\centering\vspace{3cm}\textbf{[Figure: Dashboard Layout]}\\\small Full dashboard view showing the Weight Laboratory (left), Spatial View with H3 choropleth (centre), and Impact Panel with KPI cards (right).\vspace{0.5cm}}}
+    \caption{The dashboard layout with three coordinated panels. The Weight Laboratory provides interactive weight controls and AHP pairwise comparison. The Spatial View renders MCDA suitability scores as a hexagonal choropleth with optional glyph overlays. The Impact Panel displays KPIs and scenario comparison charts.}
+    \label{fig:dashboard-layout}
+\end{figure}
+
+%--------------------------------------------------------------
+\subsection{Weight Laboratory}
+\label{sec:weight-lab}
+
+The Weight Laboratory provides two complementary mechanisms for criterion weight assignment:
+
+\paragraph{Direct manipulation via parallel coordinates.}
+A parallel coordinate display renders the $m$ active criteria as vertical axes. Each axis carries a draggable handle that controls the criterion weight; dragging upward increases the weight while the remaining weights are proportionally adjusted to maintain the unit-sum constraint. A horizontal bar chart below the parallel coordinates provides a secondary encoding of the weight distribution. Criteria can be toggled on or off, and their benefit/cost polarity can be switched, with each change triggering an immediate MCDA re-computation.
+
+\paragraph{Pairwise comparison via AHP.}
+An interactive AHP matrix interface (Figure~\ref{fig:ahp-interface}) enables structured weight elicitation. Users adjust pairwise importance ratios on the Saaty scale ($\tfrac{1}{9}$ to $9$) using sliders. The system solves the comparison matrix in real time using the Row Geometric Mean Method (Section~\ref{sec:ahp}), displaying the derived weights, the Consistency Ratio (CR), and a consistency status indicator. When $\text{CR} < 0.10$, the derived weights can be applied to the MCDA model with a single action, replacing the current direct-manipulation weights. A diagnostics panel shows the full comparison matrix, enabling users to identify and correct inconsistent judgements.
+
+\begin{figure}[htbp]
+    \centering
+    % PLACEHOLDER: Screenshot of the AHP comparison interface
+    \fbox{\parbox{0.95\columnwidth}{\centering\vspace{3cm}\textbf{[Figure: AHP Interface]}\\\small The AHP pairwise comparison panel showing sliders for each criterion pair, derived weights, and the Consistency Ratio indicator.\vspace{0.5cm}}}
+    \caption{The AHP pairwise comparison interface. Sliders control the relative importance of each criterion pair. The derived weight vector and Consistency Ratio are computed and displayed in real time.}
+    \label{fig:ahp-interface}
+\end{figure}
+
+\paragraph{Method selection.}
+A dropdown control allows switching between WSM, WPM, and TOPSIS aggregation methods. Changing the method triggers a new DuckDB query with the same weight vector but a different scoring function, enabling rapid comparison of how methodological choice affects the spatial ranking pattern.
+
+%--------------------------------------------------------------
+\subsection{Spatial View and Glyph Encoding}
+\label{sec:spatial-view}
+
+The primary spatial encoding is a hexagonal choropleth rendered as GeoJSON polygons over a CartoDB Positron basemap using MapLibre GL JS~\cite{maplibregl}. Each H3 cell is coloured by its MCDA suitability score using a perceptually uniform \texttt{viridis} colour scale, with opacity adjustable via a continuous slider.
+
+An optional glyph overlay (Figure~\ref{fig:glyph-map}) projects per-cell criterion profiles as either \emph{bar glyphs} (up to 6 criteria) or \emph{rose glyphs} (up to 8 criteria), drawn on HTML5 Canvas and positioned at cell centroids. The glyph layer encodes multiple visual variables following Bertin's~\cite{bertin1983semiology} framework:
+
+\begin{itemize}[nosep]
+    \item \textbf{Size}: petal length (rose) or bar height encodes the normalised criterion value.
+    \item \textbf{Width}: petal angular sweep (rose only) encodes the criterion weight, making higher-weighted criteria visually dominant.
+    \item \textbf{Texture}: a diagonal hatch pattern distinguishes \emph{cost} criteria from \emph{benefit} criteria within the same glyph, following the convention that texture signals qualitative difference.
+    \item \textbf{Comparison mode}: clicking a glyph pins it as a reference; subsequent hover glyphs show a dashed outline of the pinned profile for direct pairwise comparison.
+\end{itemize}
+
+\noindent The glyph aggregation resolution is user-controlled (H3~r6--r10), enabling analysts to switch between local detail and regional overview without recomputing MCDA scores.
+
+\begin{figure}[htbp]
+    \centering
+    % PLACEHOLDER: Screenshot showing glyph overlay on map
+    \fbox{\parbox{0.95\columnwidth}{\centering\vspace{3cm}\textbf{[Figure: Glyph Map]}\\\small Map view with rose glyph overlay showing per-cell criterion profiles. Cost criteria are distinguished by a hatch pattern. A pinned reference glyph (solid) enables comparison with a hovered glyph (dashed outline).\vspace{0.5cm}}}
+    \caption{The glyph overlay showing rose glyphs at H3 resolution~8. Each petal represents a criterion: length encodes the normalised value, angular width encodes the weight, and hatching distinguishes cost criteria. The comparison mode overlays a pinned reference profile (solid) against the hovered cell (dashed).}
+    \label{fig:glyph-map}
+\end{figure}
+
+%--------------------------------------------------------------
+\subsection{Simulation Mode and Placement Interaction}
+\label{sec:simulation-mode}
+
+Activating \emph{Simulation Mode} changes the map cursor to an EVCP placement marker and enables a click-to-place interaction on any H3 cell. On click, the system:
+
+\begin{enumerate}[nosep]
+    \item Retrieves the MCDA query result row for the clicked cell, extracting both raw and normalised criterion values as well as LSOA and borough metadata from the underlying DuckDB tables.
+    \item Opens a placement configuration popover displaying the reverse-geocoded address (via Nominatim), a charger type selector, a charger count slider, and the estimated installation cost.
+    \item On confirmation, stores the placement with its full spatial context---criterion values, LSOA code, LSOA name, and borough name---ensuring that impact calculations remain reproducible even if the user later changes MCDA weights.
+\end{enumerate}
+
+\noindent This \emph{capture-at-placement-time} design is a deliberate architectural choice: by snapshotting the spatial data when the placement is created, the impact model is decoupled from the current MCDA state, preventing silent invalidation of impact estimates when criterion weights change.
+
+%--------------------------------------------------------------
+\subsection{Impact Panel: KPIs and Radar Comparison}
+\label{sec:impact-panel}
+
+The right panel (Figure~\ref{fig:impact-panel}) renders eight KPI cards (Section~\ref{sec:demand}) with large-format numbers and contextual labels. When multiple scenarios are saved, a radar chart normalises six axes---energy, carbon, revenue, population, utilisation, and headroom spare---to $[0, 1]$ using the maximum value across all series, enabling direct visual comparison of scenario profiles.
+
+\begin{figure}[htbp]
+    \centering
+    % PLACEHOLDER: Screenshot of Impact Panel with KPI cards and radar chart
+    \fbox{\parbox{0.95\columnwidth}{\centering\vspace{3cm}\textbf{[Figure: Impact Panel]}\\\small The Impact Panel showing KPI cards (top), a radar chart comparing two saved scenarios (middle), and a per-LSOA breakdown table (bottom).\vspace{0.5cm}}}
+    \caption{The Impact Panel. KPI cards display energy delivered, carbon saved, installation cost, revenue, peak demand, headroom impact, population served, and utilisation. The radar chart enables multi-dimensional comparison of saved scenarios.}
+    \label{fig:impact-panel}
+\end{figure}
+
+\subsubsection{Per-LSOA Breakdown}
+
+For multi-placement scenarios, a collapsible section groups placements by their LSOA code (carried as metadata on each placement) and reports per-group summaries including charger count, aggregated energy, carbon, peak demand, and borough name. This enables planners to assess spatial concentration and identify areas receiving disproportionate or insufficient investment.
+
+%--------------------------------------------------------------
+\subsection{Scenario Contextualisation via DFES Projections}
+\label{sec:dfes}
+
+A key analytical contribution is the integration of scenario-level impact estimates with UK Power Networks' Distribution Future Energy Scenarios (DFES)~\cite{ukpn-dfes}, transforming the DFES timeseries from a passive reference panel into a coordinated supply-versus-demand visualisation.
+
+\subsubsection{Data and Geographic Scope}
+
+DFES projections are retrieved at runtime from the UKPN Open Data portal via a paginated REST API. Each record associates a year, a scenario pathway (\emph{Leading the Way}, \emph{Consumer Transformation}, \emph{System Transformation}, \emph{Falling Short}), a geographic identifier, and projected adoption counts for four technology metrics: electric cars, electric vans, heat pumps, and domestic batteries. The panel supports three levels of geographic scoping---Network, Borough, and LSOA---selectable via a toggle control. When the user clicks an H3 cell on the map, the LSOA code and borough name propagate to the DFES panel, which auto-selects the appropriate scope.
+
+\subsubsection{Supply--Demand Overlay}
+
+The scenario's aggregated impact KPIs are converted into DFES-commensurate units. For example, annual energy delivered is converted to the number of EVs supportable ($V_{\text{EV}} = E_{\text{annual}} / 2{,}500~\text{kWh}$), and peak demand to equivalent domestic battery installations ($V_{\text{BAT}} = P_{\text{peak}} / 4~\text{kW}$). The converted value is rendered as a horizontal dashed line across the DFES timeseries chart.
+
+Shaded fill areas between the supply line and each demand pathway curve communicate the supply--demand relationship (Figure~\ref{fig:dfes-overlay}):
+
+\begin{itemize}[nosep]
+    \item \textbf{Green fill} (below the supply line): projected demand is within the scenario's supply capacity.
+    \item \textbf{Red fill} (above the supply line): projected demand exceeds the supply capacity, indicating unmet demand.
+\end{itemize}
+
+\subsubsection{Year of Constriction}
+
+For each DFES pathway, the platform identifies the \emph{year of constriction}---the first year in which the projected demand curve crosses the supply line from below, computed via linear interpolation:
+
+\begin{equation}
+\label{eq:constriction}
+t^{*} = t_i + \frac{V - y_i}{y_{i+1} - y_i} \cdot (t_{i+1} - t_i)
+\end{equation}
+
+\noindent This is encoded as a filled circle at the intersection point with a vertical drop-line to the $x$-axis, providing a direct temporal answer to the planning question: ``Under which pathway, and in which year, will this deployment become insufficient?''
+
+\begin{figure}[htbp]
+    \centering
+    % PLACEHOLDER: Screenshot of DFES timeseries with supply-demand overlay
+    \fbox{\parbox{0.95\columnwidth}{\centering\vspace{3cm}\textbf{[Figure: DFES Overlay]}\\\small DFES timeseries showing four demand pathways (coloured lines) with the scenario supply line (dashed horizontal). Green shading indicates sufficient capacity; red shading indicates unmet demand. Year-of-constriction markers appear at pathway--supply intersections.\vspace{0.5cm}}}
+    \caption{The DFES timeseries panel with supply--demand overlay. The horizontal dashed line represents the scenario's supply capacity (converted to DFES metric units). Shaded regions encode the temporal supply--demand relationship. Intersection markers indicate the year of constriction for each demand pathway.}
+    \label{fig:dfes-overlay}
+\end{figure}
+
+%--------------------------------------------------------------
+\subsection{Scenario Management}
+\label{sec:scenario-mgmt}
+
+The Scenario Manager enables users to save the complete analytical state---MCDA weights, method, criterion polarities, AHP comparisons, and all placements---as a named scenario. Saved scenarios can be restored, compared side-by-side via the radar chart, imported/exported as JSON files, and toggled between visible, highlighted, and hidden display modes. This supports iterative planning workflows where a planner evaluates multiple deployment strategies and selects the preferred alternative based on multi-dimensional performance comparison.
+
+%--------------------------------------------------------------
+\subsection{Coordinated Linking Model}
+\label{sec:linking}
+
+Interactions propagate across views through a shared reactive store:
+
+\begin{itemize}[nosep]
+    \item \textbf{Map $\rightarrow$ DFES}: clicking an H3 cell sets the selected LSOA and borough; the DFES panel re-fetches data scoped to the selected geography.
+    \item \textbf{Map $\rightarrow$ Impact}: placing a charger triggers impact recalculation; KPI cards and the radar chart update within the same render cycle.
+    \item \textbf{Weight Lab $\rightarrow$ Map}: adjusting a criterion weight re-runs the DuckDB MCDA query; the choropleth and glyph overlays update after a 200\,ms debounce to maintain responsive interaction.
+    \item \textbf{DFES $\rightarrow$ Map}: selecting an LSOA in the DFES panel updates the map's selected geography and adjusts the scope accordingly.
+\end{itemize}
+
+\noindent This architecture supports \emph{loose coupling}: each panel subscribes only to the state slices it needs, minimising unnecessary re-renders during high-frequency interactions such as weight dragging.
