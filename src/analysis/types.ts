@@ -46,11 +46,23 @@ export interface ChargerSpec {
   installMonths: number
 }
 
+export interface PlacementCellData {
+  /** Raw field values keyed by criterion ID (original units from parquet) */
+  raw: Record<string, number>
+  /** Min-max normalized values (0–1) keyed by criterion ID */
+  normalized: Record<string, number>
+  /** Non-numeric attributes from DuckDB (LSOA / borough context) */
+  metadata?: { lsoa21cd?: string; lsoa21nm?: string; borough_name?: string }
+}
+
 export interface EVCPPlacement {
   h3Cell: string
   chargerType: ChargerType
   chargerCount: number
   timestamp: number
+  lsoaCode?: string
+  /** Spatial data captured at placement time from MCDA results */
+  cellData?: PlacementCellData
 }
 
 export interface ImpactEstimate {
@@ -68,10 +80,13 @@ export interface ImpactEstimate {
 export interface Scenario {
   id: string
   name: string
+  description?: string
   timestamp: number
   weights: Record<string, number>
   polarities?: Record<string, CriterionPolarity>
   method: MCDAMethod
+  activeCriteria?: string[]
+  ahpComparisons?: AHPComparison[]
   placements: EVCPPlacement[]
   impactSummary?: ImpactEstimate
 }
@@ -97,7 +112,7 @@ export const CRITERIA_CONFIG: Criterion[] = [
     weight: 0.5,
     polarity: 'benefit',
     active: true,
-    color: '#10b981',
+    color: '#1d4ed8',
     category: 'demand',
     description: 'Households with at least one car',
   },
@@ -121,7 +136,7 @@ export const CRITERIA_CONFIG: Criterion[] = [
     weight: 0.5,
     polarity: 'benefit',
     active: true,
-    color: '#7c3aed',
+    color: '#d97706',
     category: 'equity',
     description: 'Share of residents reporting disability',
   },
@@ -145,7 +160,7 @@ export const CRITERIA_CONFIG: Criterion[] = [
     weight: 0.5,
     polarity: 'benefit',
     active: true,
-    color: '#06b6d4',
+    color: '#a78bfa',
     category: 'accessibility',
     description: 'Supermarkets within 30 min by public transport',
   },
@@ -181,7 +196,7 @@ export const CRITERIA_CONFIG: Criterion[] = [
     weight: 0.5,
     polarity: 'benefit',
     active: true,
-    color: '#ec4899',
+    color: '#60a5fa',
     category: 'demand',
     description: 'Observed annual motorized traffic count',
   },

@@ -1,0 +1,256 @@
+% 3_methodology.tex
+
+\section{Analytical Framework}
+\label{sec:methodology}
+
+The platform integrates two analytical components: a multi-criteria suitability model for ranking candidate locations and a lightweight impact estimation model for evaluating the consequences of proposed charger deployments. Both operate client-side over a hexagonal spatial tessellation using H3 cells at resolution~10, with each cell covering approximately $0.015~\text{km}^2$.
+
+%--------------------------------------------------------------
+\subsection{Spatial Data Model}
+\label{sec:spatial-data}
+
+The study area (Greater London) is discretised into $n \approx 118{,}000$ H3 hexagonal cells at resolution~10 using Uber's H3 hierarchical spatial index~\cite{uber2018h3}. Each cell $h$ carries a vector of $m = 9$ criterion values derived from heterogeneous urban datasets:
+
+\begin{equation}
+\mathbf{x}_h = \bigl(x_{h,1},\; x_{h,2},\; \ldots,\; x_{h,m}\bigr)
+\end{equation}
+
+\noindent All criterion values are pre-normalised to $[0, 1]$ using min-max normalisation prior to ingestion, ensuring deterministic and reproducible scoring without runtime normalisation cost. Table~\ref{tab:criteria} lists the nine criteria and their data sources. Each cell also carries three administrative geography attributes---LSOA code, LSOA name, and London borough name---enabling direct linkage to external datasets such as DFES projections (Section~\ref{sec:dfes}) without runtime spatial joins.
+
+\begin{table}[htbp]
+\centering
+\caption{MCDA criteria used in the suitability model.}
+\label{tab:criteria}
+\small
+\begin{tabular}{clll}
+\toprule
+\textbf{\#} & \textbf{Criterion} & \textbf{Category} & \textbf{Source} \\
+\midrule
+$C_1$ & Population density & Demand & ONS Census 2021~\cite{ons2021census} \\
+$C_2$ & Car ownership ($\geq 1$ vehicle) & Demand & ONS Census 2021~\cite{ons2021census} \\
+$C_3$ & Deprivation ($\geq 2$ dimensions) & Equity & ONS Census 2021~\cite{ons2021census} \\
+$C_4$ & Employment accessibility (30\,min PT) & Access & Verduzco Torres et al.~\cite{verduzco2024accessibility} \\
+$C_5$ & Supermarket accessibility (30\,min PT) & Access & Verduzco Torres et al.~\cite{verduzco2024accessibility} \\
+$C_6$ & Road transport CO\textsubscript{2} emissions & Environment & LAEI 2022~\cite{laei2022emissions} \\
+$C_7$ & Grid demand headroom & Infrastructure & UKPN substation data \\
+$C_8$ & Motorised traffic index & Demand & DfT traffic counts \\
+$C_9$ & Distance to nearest existing EVCP & Coverage & Open Charge Map~\cite{openchargemapdata} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The hexagonal tessellation was chosen over regular square grids for several reasons. Hexagons minimise edge effects in spatial aggregation because each cell has six equidistant neighbours, reducing directional bias in adjacency-based analyses~\cite{uber2018h3}. The H3 system provides a hierarchical structure: cells at resolution~10 (the base analytical unit) can be aggregated to coarser parent resolutions ($r \in \{5, 6, 7, 8, 9\}$) via the \texttt{cellToParent} function, enabling multi-scale visualisation without recomputing MCDA scores.
+
+%--------------------------------------------------------------
+\subsection{Multi-Criteria Suitability Model}
+\label{sec:mcda-model}
+
+The platform supports three complementary MCDA scoring methods, each offering a different perspective on the trade-off structure. In all methods, the user assigns a weight vector $\mathbf{w} = (w_1, w_2, \ldots, w_m)$ subject to the constraint $\sum_{i=1}^{m} w_i = 1$, with $w_i \geq 0$. Each criterion can be designated as a \emph{benefit} criterion (higher values are preferred) or a \emph{cost} criterion (lower values are preferred); cost criteria are inverted ($1 - \bar{x}_{h,i}$) before scoring.
+
+%--- WSM ---
+\subsubsection{Weighted Sum Model (WSM)}
+
+The Weighted Sum Model computes a suitability score as a linear combination of normalised criterion values:
+
+\begin{equation}
+\label{eq:wsm}
+S_h^{\text{WSM}} = \sum_{i=1}^{m} w_i \cdot \bar{x}_{h,i}
+\end{equation}
+
+\noindent where $\bar{x}_{h,i} \in [0,1]$ is the normalised value of criterion~$i$ at cell~$h$. The WSM provides full compensability: a high score on one criterion can offset a low score on another. The score range is $[0, 1]$ when all normalised values and weights are non-negative.
+
+%--- WPM ---
+\subsubsection{Weighted Product Model (WPM)}
+
+The Weighted Product Model uses multiplicative aggregation, which reduces compensation between criteria:
+
+\begin{equation}
+\label{eq:wpm}
+S_h^{\text{WPM}} = \prod_{i=1}^{m} \bigl(\bar{x}_{h,i}\bigr)^{w_i}
+\end{equation}
+
+\noindent A small floor value ($\epsilon = 0.001$) is applied to prevent zero scores from nullifying the product: $\bar{x}_{h,i}' = \max(\bar{x}_{h,i},\; \epsilon)$. The WPM penalises cells with extremely low values on any criterion more heavily than the WSM, producing rankings that are more sensitive to worst-case performance.
+
+%--- TOPSIS ---
+\subsubsection{TOPSIS}
+
+The Technique for Order Preference by Similarity to Ideal Solution (TOPSIS)~\cite{hwang1981topsis} ranks alternatives based on their geometric distance to idealised best and worst solutions.
+
+First, a weighted normalised matrix is constructed:
+
+\begin{equation}
+v_{h,i} = w_i \cdot \bar{x}_{h,i}
+\end{equation}
+
+\noindent The positive ideal solution (PIS) and negative ideal solution (NIS) are determined:
+
+\begin{equation}
+A^{+}_i = \max_{h} \; v_{h,i}, \qquad
+A^{-}_i = \min_{h} \; v_{h,i}
+\end{equation}
+
+\noindent Euclidean distances from each cell to the PIS and NIS are:
+
+\begin{equation}
+D_h^{+} = \sqrt{\sum_{i=1}^{m} (v_{h,i} - A^{+}_i)^2}, \qquad
+D_h^{-} = \sqrt{\sum_{i=1}^{m} (v_{h,i} - A^{-}_i)^2}
+\end{equation}
+
+\noindent The relative closeness to the ideal solution yields the TOPSIS score:
+
+\begin{equation}
+\label{eq:topsis}
+S_h^{\text{TOPSIS}} = \frac{D_h^{-}}{D_h^{+} + D_h^{-}}
+\end{equation}
+
+\noindent with $S_h^{\text{TOPSIS}} \in [0,1]$. A cell scoring close to 1 is nearest to the ideal best and farthest from the ideal worst.
+
+%--------------------------------------------------------------
+\subsection{Weight Elicitation via AHP}
+\label{sec:ahp}
+
+Criterion weights can be derived interactively using the Analytic Hierarchy Process (AHP)~\cite{saaty1980ahp}. Users perform pairwise comparisons of criteria importance, populating an $m \times m$ reciprocal matrix $\mathbf{A}$ where:
+
+\begin{equation}
+a_{ij} = \frac{1}{a_{ji}}, \qquad a_{ii} = 1
+\end{equation}
+
+\noindent Each entry $a_{ij}$ represents the relative importance of criterion~$i$ over criterion~$j$ on the Saaty fundamental scale ($\tfrac{1}{9}$ to $9$).
+
+\paragraph{Weight derivation.}
+Priority weights are derived using the Row Geometric Mean Method (RGMM):
+
+\begin{equation}
+\label{eq:ahp-weights}
+\hat{w}_i = \frac{\left(\prod_{j=1}^{m} a_{ij}\right)^{1/m}}{\sum_{k=1}^{m} \left(\prod_{j=1}^{m} a_{kj}\right)^{1/m}}
+\end{equation}
+
+\paragraph{Consistency checking.}
+The consistency of the pairwise comparison matrix is assessed through the principal eigenvalue $\lambda_{\max}$:
+
+\begin{equation}
+\lambda_{\max} = \frac{1}{m} \sum_{i=1}^{m} \frac{(\mathbf{A} \hat{\mathbf{w}})_i}{\hat{w}_i}
+\end{equation}
+
+\noindent The Consistency Index (CI) and Consistency Ratio (CR) are:
+
+\begin{equation}
+\text{CI} = \frac{\lambda_{\max} - m}{m - 1}, \qquad
+\text{CR} = \frac{\text{CI}}{\text{RI}(m)}
+\end{equation}
+
+\noindent where $\text{RI}(m)$ is the Random Index for a matrix of size~$m$. A comparison matrix is considered acceptably consistent if $\text{CR} < 0.10$.
+
+%--------------------------------------------------------------
+\subsection{In-Browser Analytical Pipeline}
+\label{sec:data-pipeline}
+
+All spatial data processing runs client-side in a DuckDB-WASM instance~\cite{duckdb2019,duckdbwasm2022}, eliminating server infrastructure requirements. Ten Parquet files (one per criterion layer plus supplementary layers) are fetched on page load, registered as DuckDB tables, and joined on the H3 cell identifier into a unified \texttt{mcda\_base} view:
+
+\begin{equation}
+\texttt{mcda\_base} = \underset{i=1}{\overset{10}{\bowtie}} \; T_i \quad \text{on } \texttt{h3\_cell}
+\end{equation}
+
+\noindent Each Parquet file carries administrative geography fields (\texttt{lsoa21cd}, \texttt{lsoa21nm}, \texttt{borough\_name}) that are exposed once from the base table. The MCDA scoring query is dynamically generated from the current weight vector and selected method, executed against the \texttt{mcda\_base} view, and returns both the composite score and raw criterion values per cell in a single pass.
+
+This architecture offers several advantages. Parquet's columnar storage enables efficient scans over the subset of columns required by the active criteria. DuckDB's vectorised execution engine processes the approximately 118,000-row scoring query in under 200\,ms on modern hardware, well within the interactive latency threshold. The H3 spatial extension loaded into DuckDB provides \texttt{h3\_cell\_to\_parent} for resolution rollup queries, enabling multi-scale aggregation directly within SQL.
+
+%--------------------------------------------------------------
+\subsection{Hierarchical Spatial Aggregation}
+\label{sec:aggregation}
+
+For interactive visualisation at varying zoom levels, MCDA scores computed at the base resolution (H3 resolution~10) are aggregated to coarser parent resolutions ($r \in \{5, 6, 7, 8, 9\}$) using mean pooling:
+
+\begin{equation}
+S_{\text{parent}}^{(r)} = \frac{1}{|\mathcal{C}_{\text{parent}}|} \sum_{h \in \mathcal{C}_{\text{parent}}} S_h
+\end{equation}
+
+\noindent where $\mathcal{C}_{\text{parent}}$ is the set of resolution-10 child cells belonging to the parent cell at resolution~$r$. The display resolution is selected dynamically based on the current map zoom level (e.g., zoom~14+ maps to resolution~10, zoom~8 to resolution~7), reducing the number of rendered hexagons from $\sim\!118{,}000$ at full resolution to $\sim\!2{,}000$ at typical overview zoom levels.
+
+
+%==============================================================
+\section{Impact Estimation Model}
+\label{sec:impact}
+
+Once a user selects a candidate H3 cell and configures a charger deployment (type and count), the platform estimates the potential impacts of that intervention using a set of lightweight analytical equations. These are designed for real-time evaluation within an interactive environment, prioritising tractability and transparency over simulation fidelity.
+
+%--------------------------------------------------------------
+\subsection{Charger Specifications}
+\label{sec:charger-specs}
+
+The platform supports four charger types reflecting the current UK public charging market:
+
+\begin{table}[htbp]
+\centering
+\caption{Charger type specifications.}
+\label{tab:charger-specs}
+\small
+\begin{tabular}{llrrl}
+\toprule
+\textbf{Type} & \textbf{Label} & \textbf{Power (kW)} & \textbf{Cost (\pounds/unit)} & \textbf{Install} \\
+\midrule
+Slow & AC Slow & 3.7 & 1{,}000 & 1 month \\
+Fast & AC Fast & 22 & 5{,}000 & 2 months \\
+Rapid & DC Rapid & 50 & 40{,}000 & 4 months \\
+Ultra-rapid & DC Ultra-rapid & 150 & 100{,}000 & 6 months \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%--------------------------------------------------------------
+\subsection{Demand and Impact Estimation}
+\label{sec:demand}
+
+Local daily charging demand is estimated from the spatial attributes of the selected cell:
+
+\begin{equation}
+\label{eq:demand}
+D_h = \rho_h \cdot A_{\text{cell}} \cdot \gamma_h \cdot \alpha_{\text{car}} \cdot \alpha_{\text{EV}} \cdot \alpha_{\text{charge}} \cdot E_{\text{session}}
+\end{equation}
+
+\noindent where $\rho_h$ is population density, $A_{\text{cell}} = 0.015~\text{km}^2$, $\gamma_h$ is the local car ownership rate, $\alpha_{\text{car}} = 0.4$ is the cars-to-population ratio, $\alpha_{\text{EV}} = 0.15$ is the EV adoption rate, $\alpha_{\text{charge}} = 0.3$ is the daily public charging probability, and $E_{\text{session}} = 30~\text{kWh}$ is the average energy per session.
+
+The utilisation factor captures the balance between local demand and installed capacity:
+
+\begin{equation}
+\label{eq:utilisation}
+U = \min\!\left(1,\; \frac{D_h}{N \cdot P \cdot H}\right)
+\end{equation}
+
+\noindent where $N$ is the number of chargers, $P$ is the rated power (kW), and $H = 16$~hours is the daily operating window. Annual energy delivered is $E_{\text{annual}} = N \cdot P \cdot H \cdot U \cdot 365$ (kWh/year).
+
+Carbon savings compare displaced ICE emissions with grid emissions from EV charging:
+
+\begin{equation}
+\label{eq:carbon}
+C_{\text{saved}} = \frac{E_{\text{annual}}}{\eta_{\text{EV}}} \cdot \text{EF}_{\text{ICE}} - E_{\text{annual}} \cdot \text{EF}_{\text{grid}}
+\end{equation}
+
+\noindent where $\eta_{\text{EV}} = 0.18~\text{kWh/km}$, $\text{EF}_{\text{ICE}} = 0.21~\text{kgCO}_2\text{/km}$, and $\text{EF}_{\text{grid}} = 0.233~\text{kgCO}_2\text{/kWh}$.
+
+Grid impact is estimated as the peak demand ($P_{\text{peak}} = N \cdot P \cdot f_{\text{div}}$, with diversity factor $f_{\text{div}} = 0.7$) expressed as a fraction of available substation capacity. Population served is estimated over the target cell and its six H3 neighbours (the 1-ring). Financial indicators include total installation cost and estimated annual revenue at a public charging tariff of \pounds0.35/kWh.
+
+Table~\ref{tab:kpis} summarises the eight key performance indicators computed for each scenario.
+
+\begin{table}[htbp]
+\centering
+\caption{Impact KPIs reported by the platform.}
+\label{tab:kpis}
+\small
+\begin{tabular}{llll}
+\toprule
+\textbf{KPI} & \textbf{Unit} & \textbf{Equation} & \textbf{Aggregation} \\
+\midrule
+Energy delivered & kWh/year & Eq.~\ref{eq:demand}--\ref{eq:utilisation} & Sum \\
+Carbon saved & tCO\textsubscript{2}/year & Eq.~\ref{eq:carbon} & Sum \\
+Installation cost & \pounds & per-unit cost & Sum \\
+Annual revenue & \pounds/year & energy $\times$ tariff & Sum \\
+Peak demand & kW & $N \cdot P \cdot f_{\text{div}}$ & Sum \\
+Headroom impact & \% & peak / capacity & Average \\
+Population served & persons & density $\times$ area $\times$ 7 & Sum \\
+Utilisation factor & \% & Eq.~\ref{eq:utilisation} & Average \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+When the user places chargers at multiple locations, additive metrics are summed across placements and ratio metrics are averaged.

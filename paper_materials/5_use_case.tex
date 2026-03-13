@@ -1,0 +1,82 @@
+% 5_use_case.tex
+
+\section{Use Case: EVCP Planning in Greater London}
+\label{sec:use-case}
+
+This section presents a walkthrough of the platform through a representative planning scenario, illustrating how a transport planner might use the system to evaluate and compare alternative EVCP deployment strategies. The walkthrough follows a complete analytical cycle: weight configuration, spatial exploration, placement, impact assessment, temporal contextualisation, and scenario comparison.
+
+%--------------------------------------------------------------
+\subsection{Problem Context}
+\label{sec:problem-context}
+
+A transport planning officer at a London borough is tasked with identifying suitable locations for new rapid charging infrastructure. The planner must balance several competing objectives: locating chargers near high-demand areas (population density, traffic volume), ensuring equitable coverage in deprived communities, avoiding locations where the electricity grid is already constrained, and complementing the existing public charging network rather than duplicating it. The planner must also estimate the downstream impact of proposed deployments to justify investment to council decision-makers.
+
+%--------------------------------------------------------------
+\subsection{Step 1: Configuring Criterion Weights}
+\label{sec:uc-weights}
+
+The planner begins by examining the nine criteria in the Weight Laboratory (Figure~\ref{fig:dashboard-layout}). Initially, all criteria carry equal weights ($w_i = 1/9$). The planner adjusts the weights using the parallel coordinate interface, increasing the importance of population density ($C_1$), car ownership ($C_2$), and distance to nearest existing EVCP ($C_9$) while reducing the weight on employment accessibility ($C_4$). Each drag interaction triggers a re-computation of the MCDA scores across all 118,000 H3 cells, and the choropleth map updates within approximately 200\,ms.
+
+To validate the subjective weight assignment, the planner switches to the AHP pairwise comparison panel (Figure~\ref{fig:ahp-interface}). Using the slider controls, the planner expresses that population density is ``moderately more important'' (scale value 3) than car ownership, and ``strongly more important'' (scale value 5) than employment accessibility. After completing the pairwise comparisons, the system reports a Consistency Ratio of $\text{CR} = 0.06 < 0.10$, indicating acceptable consistency. The planner applies the AHP-derived weights, which replace the manually assigned values and immediately update the spatial view.
+
+%--------------------------------------------------------------
+\subsection{Step 2: Exploring Spatial Suitability}
+\label{sec:uc-spatial}
+
+With the weights configured, the planner examines the suitability map. At the city-wide zoom level, the choropleth displays H3 cells at resolution~7 ($\sim$2,000 hexagons), providing an overview of spatial suitability patterns across Greater London. Areas of high suitability (dark colours on the \texttt{viridis} scale) are concentrated in inner London boroughs with high population density and traffic volume.
+
+The planner activates the glyph overlay at resolution~8 and selects the rose glyph type to examine the multi-criteria profiles of high-scoring areas (Figure~\ref{fig:glyph-map}). Two clusters of high-scoring cells emerge: one in the Southwark area, where all criteria contribute strongly, and another in Hackney, where high population density and deprivation scores dominate but grid headroom is relatively constrained (indicated by a shorter petal for $C_7$). The planner clicks on a glyph in Southwark to pin it as a reference, then hovers over the Hackney glyph to compare profiles. The dashed overlay reveals that the Hackney cell has lower grid headroom and slightly less existing EVCP coverage.
+
+The planner also switches between MCDA methods to assess ranking robustness. Under WSM, the two areas rank similarly. Under WPM, the Hackney cell drops in rank because its low grid headroom value ($\bar{x}_{h,7} = 0.22$) is penalised multiplicatively. Under TOPSIS, the Southwark cell ranks higher due to its closer proximity to the ideal solution across all criteria. This methodological sensitivity analysis, performed in seconds through the method dropdown, informs the planner that the Southwark location is robust across analytical methods while the Hackney location is more sensitive to the treatment of its weak criterion.
+
+%--------------------------------------------------------------
+\subsection{Step 3: Placing Chargers and Evaluating Impact}
+\label{sec:uc-placement}
+
+The planner activates Simulation Mode and zooms to the Southwark area at resolution~10 to view individual cells. Clicking a cell near a major intersection opens the placement configuration popover, which displays the reverse-geocoded address and the cell's raw criterion values. The planner selects ``DC Rapid'' (50\,kW) as the charger type and sets the count to 4. The estimated installation cost (\pounds160,000) appears immediately.
+
+Upon confirming the placement, the Impact Panel on the right updates with eight KPI cards (Figure~\ref{fig:impact-panel}):
+
+\begin{itemize}[nosep]
+    \item Energy delivered: 456,250 kWh/year
+    \item Carbon saved: 312 tCO\textsubscript{2}/year
+    \item Installation cost: \pounds160,000
+    \item Annual revenue: \pounds159,688/year
+    \item Peak demand: 140 kW
+    \item Headroom impact: 12.3\%
+    \item Population served: 1,842 persons
+    \item Utilisation: 78\%
+\end{itemize}
+
+The planner then places a second deployment of 2 AC Fast chargers (22\,kW) in Hackney. The Impact Panel aggregates the metrics across both placements: total energy delivered rises to 714,570 kWh/year, and total carbon saved to 489 tCO\textsubscript{2}/year. The per-LSOA breakdown shows the contribution of each location. The headroom impact for the Hackney placement is 28.4\%, higher than Southwark's 12.3\%, confirming the grid constraint concern identified during the glyph comparison.
+
+%--------------------------------------------------------------
+\subsection{Step 4: Temporal Contextualisation via DFES}
+\label{sec:uc-dfes}
+
+The planner examines the DFES timeseries panel below the map (Figure~\ref{fig:dfes-overlay}), which auto-scopes to the Southwark borough based on the selected cell. The electric cars metric shows four demand pathways rising from approximately 2,000 vehicles in 2025 to between 15,000 and 45,000 by 2050. The scenario supply line---computed from the total annual energy delivered, converted to the number of EVs supportable ($V_{\text{EV}} = 714{,}570 / 2{,}500 \approx 286$ vehicles)---appears as a horizontal dashed line.
+
+The green/red shading reveals that the proposed deployment covers the projected demand under all pathways until approximately 2031 (``Leading the Way'' pathway), 2033 (``Consumer Transformation''), 2036 (``System Transformation''), and 2042 (``Falling Short''). The year-of-constriction markers with vertical drop-lines make these transition points immediately legible.
+
+The planner widens the scope to Network level to see the aggregate impact against London-wide demand, observing that the two-site deployment is a small fraction of the city's projected need. Switching to the Borough scope for Hackney reveals tighter headroom: the year of constriction under ``Leading the Way'' occurs in 2029, two years earlier than Southwark, reflecting Hackney's faster projected EV uptake and the smaller deployment size.
+
+%--------------------------------------------------------------
+\subsection{Step 5: Saving and Comparing Scenarios}
+\label{sec:uc-compare}
+
+Satisfied with the analysis, the planner saves the current scenario as ``Scenario A: Rapid + Fast Mix.'' The planner then creates a second scenario by removing the Hackney placement and adding a larger deployment of 6 DC Ultra-rapid chargers (150\,kW) at a single location near Canary Wharf. This scenario is saved as ``Scenario B: Concentrated Ultra-rapid.''
+
+Both scenarios are selected for comparison in the Scenario Manager. The radar chart in the Impact Panel (Figure~\ref{fig:impact-panel}) normalises the six comparison axes across both scenarios, revealing their distinct profiles:
+
+\begin{itemize}[nosep]
+    \item Scenario A (distributed, mixed) scores higher on population coverage and has lower headroom impact but delivers less total energy.
+    \item Scenario B (concentrated, ultra-rapid) delivers substantially more energy and carbon savings but concentrates grid stress at a single substation and serves fewer residents directly.
+\end{itemize}
+
+\noindent The radar chart enables the planner to assess these trade-offs at a glance. The planner exports both scenarios as JSON files for discussion at the next borough planning meeting, where stakeholders can import them into the platform and explore the assumptions interactively.
+
+%--------------------------------------------------------------
+\subsection{Summary}
+\label{sec:uc-summary}
+
+This walkthrough demonstrates how the platform supports a complete planning workflow: from criterion weight configuration and spatial exploration through placement simulation, impact estimation, temporal stress testing, and multi-scenario comparison. The interactive nature of the system enables rapid iteration---the planner completed the entire analysis in a single session without batch processing or server-side computation---while the coordinated views ensure that spatial, analytical, and temporal perspectives remain synchronised throughout the exploration.

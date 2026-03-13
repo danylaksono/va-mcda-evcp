@@ -1,15 +1,23 @@
 import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import maplibregl from 'maplibre-gl'
+import type {
+  LineLayerSpecification,
+  CircleLayerSpecification,
+  FillLayerSpecification,
+  SymbolLayerSpecification,
+} from '@maplibre/maplibre-gl-style-spec'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { cellToParent, getResolution } from 'h3-js'
+import { Protocol } from 'pmtiles'
 import { useMapStore } from '@/store/map-store'
 import { useMCDAStore } from '@/store/mcda-store'
 import { useScenarioStore } from '@/store/scenario-store'
 import { h3ScoresToGeoJSON, getH3Center } from '@/utils/h3-utils'
 import { scoreToColor } from '@/utils/color-scales'
 import { ChargerConfig } from '../impact/ChargerConfig'
-import { Zap } from 'lucide-react'
-import type { EVCPPlacement } from '@/analysis/types'
+import { SlidersHorizontal, Zap } from 'lucide-react'
+import type { EVCPPlacement, PlacementCellData } from '@/analysis/types'
+import { buildScenarioRenderList, MUTED_COLOR } from '@/scenarios/scenario-styles'
 
 interface MapViewProps {
   mcdaResults: Array<{
@@ -17,6 +25,9 @@ interface MapViewProps {
     mcda_score: number
     criterion_values?: Record<string, number>
     raw_values?: Record<string, number>
+    lsoa21cd?: string
+    lsoa21nm?: string
+    borough_name?: string
   }>
 }
 
@@ -38,6 +49,152 @@ const LONDON_CENTER: [number, number] = [-0.1276, 51.5074]
 const BASEMAP_STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
 const EVCP_CURSOR_SVG = `<svg xmlns='http://www.w3.org/2000/svg' width='34' height='34' viewBox='0 0 34 34'><path fill='%23dc2626' d='M17 33s10-11.2 10-18A10 10 0 1 0 7 15c0 6.8 10 18 10 18Z'/><circle cx='17' cy='14.5' r='6.3' fill='%23fff'/><path fill='%230f172a' d='M18 10h-2.2l-.8 4h2.1l-.8 4 3.7-5h-2.1z'/></svg>`
 const EVCP_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(EVCP_CURSOR_SVG)}") 17 31, crosshair`
+const CHARGEPOINT_ICON_ID = 'chargepoint-marker'
+// const CHARGEPOINT_ICON_URL = '/icons/chargepoint-marker.svg'
+
+type OverlayConfig =
+  | {
+    id: string
+    label: string
+    url: string
+    sourceLayer: string
+    type: 'line'
+    paint: NonNullable<LineLayerSpecification['paint']>
+  }
+  | {
+    id: string
+    label: string
+    url: string
+    sourceLayer: string
+    type: 'circle'
+    paint: NonNullable<CircleLayerSpecification['paint']>
+  }
+  | {
+    id: string
+    label: string
+    url: string
+    sourceLayer: string
+    type: 'fill'
+    paint: NonNullable<FillLayerSpecification['paint']>
+  }
+  | {
+    id: string
+    label: string
+    url: string
+    sourceLayer: string
+    type: 'symbol'
+    layout: NonNullable<SymbolLayerSpecification['layout']>
+    paint?: SymbolLayerSpecification['paint']
+  }
+
+const PMTILES_OVERLAYS: OverlayConfig[] = [
+  {
+    id: 'lsoa-boundaries',
+    label: 'LSOA boundaries',
+    url: '/data_source/pmtiles/lsoa_boundaries.pmtiles',
+    sourceLayer: 'lsoa_boundaries',
+    type: 'line',
+    paint: {
+      'line-color': '#0f172a',
+      'line-width': 0.8,
+      'line-opacity': 0.4,
+    },
+  },
+  {
+    id: 'london-boroughs',
+    label: 'London boroughs',
+    url: '/data_source/pmtiles/london_boroughs.pmtiles',
+    sourceLayer: 'london_boroughs',
+    type: 'line',
+    paint: {
+      'line-color': '#0f172a',
+      'line-width': 1.4,
+      'line-opacity': 0.7,
+    },
+  },
+  {
+    id: 'london-chargepoints',
+    label: 'Existing Chargepoints',
+    url: '/data_source/pmtiles/london_chargepoints.pmtiles',
+    sourceLayer: 'london_chargepoints',
+    type: 'symbol',
+    layout: {
+      'icon-image': CHARGEPOINT_ICON_ID,
+      'icon-size': [
+        'interpolate',
+        ['linear'],
+        ['zoom'],
+        9,
+        0.4,
+        12,
+        0.55,
+        15,
+        0.7,
+      ],
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+    },
+  },
+  {
+    id: 'lsoa-fills',
+    label: 'LSOA Area Selections',
+    url: '/data_source/pmtiles/lsoa_boundaries.pmtiles',
+    sourceLayer: 'lsoa_boundaries',
+    type: 'fill',
+    paint: {
+      'fill-color': 'rgba(0,0,0,0)',
+      'fill-opacity': 0
+    },
+  },
+]
+
+const buildOverlayLayer = (
+  overlay: OverlayConfig,
+  sourceId: string,
+  visibility: 'visible' | 'none'
+): LineLayerSpecification | CircleLayerSpecification | FillLayerSpecification | SymbolLayerSpecification => {
+  if (overlay.type === 'line') {
+    return {
+      id: overlay.id,
+      type: 'line',
+      source: sourceId,
+      'source-layer': overlay.sourceLayer,
+      layout: { visibility },
+      paint: overlay.paint,
+    }
+  }
+  if (overlay.type === 'circle') {
+    return {
+      id: overlay.id,
+      type: 'circle',
+      source: sourceId,
+      'source-layer': overlay.sourceLayer,
+      layout: { visibility },
+      paint: overlay.paint,
+    }
+  }
+  if (overlay.type === 'symbol') {
+    return {
+      id: overlay.id,
+      type: 'symbol',
+      source: sourceId,
+      'source-layer': overlay.sourceLayer,
+      layout: {
+        ...overlay.layout,
+        visibility,
+      },
+      paint: overlay.paint ?? {},
+    }
+  }
+  return {
+    id: overlay.id,
+    type: 'fill',
+    source: sourceId,
+    'source-layer': overlay.sourceLayer,
+    layout: { visibility },
+    paint: overlay.paint,
+  }
+}
 
 export function MapView({ mcdaResults }: MapViewProps) {
   const mapContainer = useRef<HTMLDivElement>(null)
@@ -46,17 +203,24 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const glyphTooltipActiveRef = useRef(false)
   const glyphMarkersRef = useRef<maplibregl.Marker[]>([])
   const latestPlacementsRef = useRef<EVCPPlacement[]>([])
+  const mcdaResultsRef = useRef(mcdaResults)
   const isSimulationModeRef = useRef(false)
+  const pmtilesProtocolRef = useRef<Protocol | null>(null)
   const [showChargerConfig, setShowChargerConfig] = useState(false)
   const [showPolygonLayer, setShowPolygonLayer] = useState(true)
   const [polygonOpacity, setPolygonOpacity] = useState(0.65)
   const [showGlyphLayer, setShowGlyphLayer] = useState(false)
-  const [showTooltips, setShowTooltips] = useState(true)
+  const [showTooltips, setShowTooltips] = useState(false)
+  const [showLayerPanel, setShowLayerPanel] = useState(true)
   const [glyphType, setGlyphType] = useState<'bars' | 'rose'>('bars')
   const [glyphAggregation, setGlyphAggregation] = useState<'auto' | 6 | 7 | 8 | 9 | 10>(7)
   const [glyphSizeScale, setGlyphSizeScale] = useState(1)
   const [comparisonGlyph, setComparisonGlyph] = useState<GlyphDatum | null>(null)
   const [selectedClickLocation, setSelectedClickLocation] = useState<ClickLocation | null>(null)
+  const [placementCellData, setPlacementCellData] = useState<PlacementCellData | null>(null)
+  const [overlayVisibility, setOverlayVisibility] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(PMTILES_OVERLAYS.map((overlay) => [overlay.id, false]))
+  )
 
   const setMapReady = useMapStore((s) => s.setMapReady)
   const isMapReady = useMapStore((s) => s.isMapReady)
@@ -65,11 +229,15 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const setZoom = useMapStore((s) => s.setZoom)
   const criteria = useMCDAStore((s) => s.criteria)
 
+  const setSelectedLSOA = useMapStore((s) => s.setSelectedLSOA)
   const currentPlacements = useScenarioStore((s) => s.currentPlacements)
   const isSimulationMode = useScenarioStore((s) => s.isSimulationMode)
   const setSimulationMode = useScenarioStore((s) => s.setSimulationMode)
   const selectedPlacementCell = useScenarioStore((s) => s.selectedPlacementCell)
   const setSelectedPlacementCell = useScenarioStore((s) => s.setSelectedPlacementCell)
+  const scenarios = useScenarioStore((s) => s.scenarios)
+  const visibleScenarioIds = useScenarioStore((s) => s.visibleScenarioIds)
+  const comparedScenarioIds = useScenarioStore((s) => s.comparedScenarioIds)
 
   const glyphLegendCriteria = useMemo(() => {
     const maxItems = glyphType === 'rose' ? 8 : 6
@@ -102,6 +270,68 @@ export function MapView({ mcdaResults }: MapViewProps) {
     }
     return new Intl.NumberFormat('en-GB', { maximumFractionDigits: 4 }).format(value)
   }, [])
+
+  const safeJsonParse = useCallback(<T,>(value: unknown): T | null => {
+    if (typeof value !== 'string') return null
+    try {
+      return JSON.parse(value) as T
+    } catch {
+      return null
+    }
+  }, [])
+
+  const buildChargepointPopupHtml = useCallback(
+    (props: Record<string, unknown>) => {
+      const address = safeJsonParse<Record<string, unknown>>(props.AddressInfo)
+      const connections = safeJsonParse<Array<Record<string, unknown>>>(props.Connections)
+
+      const locationParts = [
+        address?.Title,
+        address?.AddressLine1,
+        address?.Town,
+        address?.Postcode,
+      ].filter(Boolean)
+      const location = locationParts.length > 0 ? locationParts.join(', ') : 'N/A'
+
+      const operator = props.OperatorsReference ?? props.OperatorID ?? props.DataProvidersReference ?? 'Unknown'
+
+      const connectorSummary = Array.isArray(connections)
+        ? connections
+          .map((connection) => {
+            const power = Number(connection.PowerKW)
+            const quantity = Number(connection.Quantity)
+            const powerLabel = Number.isFinite(power) ? `${power.toFixed(1)} kW` : null
+            const qtyLabel = Number.isFinite(quantity) ? `x${quantity}` : null
+            return [powerLabel, qtyLabel].filter(Boolean).join(' ')
+          })
+          .filter((entry) => entry.length > 0)
+          .join(', ')
+        : ''
+
+      const statusId = Number(props.StatusTypeID)
+      const status = Number.isFinite(statusId)
+        ? statusId === 50
+          ? 'Operational'
+          : statusId === 0
+            ? 'Unknown'
+            : `Status ${statusId}`
+        : 'Unknown'
+
+      return `
+        <div class="p-2 min-w-[240px]">
+          <h3 class="text-sm font-bold border-b pb-1 mb-2">Existing Chargepoint</h3>
+          <div class="space-y-1 text-xs text-slate-700">
+            <p><strong>Operator:</strong> ${operator}</p>
+            <p><strong>Location:</strong> ${location}</p>
+            <p><strong>Connectors:</strong> ${connectorSummary || 'N/A'}</p>
+            <p><strong>Points:</strong> ${props.NumberOfPoints ?? 'N/A'}</p>
+            <p><strong>Status:</strong> ${status}</p>
+          </div>
+        </div>
+      `
+    },
+    [safeJsonParse]
+  )
 
   const buildTooltipHtml = useCallback(
     (
@@ -177,8 +407,35 @@ export function MapView({ mcdaResults }: MapViewProps) {
     glyphMarkersRef.current = []
   }, [])
 
+  const applyLayerVisibility = useCallback((map: maplibregl.Map) => {
+    const polygonVisibility = showPolygonLayer ? 'visible' : 'none'
+    if (map.getLayer('h3-fill')) {
+      map.setLayoutProperty('h3-fill', 'visibility', polygonVisibility)
+      map.setPaintProperty('h3-fill', 'fill-opacity', polygonOpacity)
+    }
+    if (map.getLayer('h3-outline')) {
+      map.setLayoutProperty('h3-outline', 'visibility', polygonVisibility)
+    }
+
+    for (const overlay of PMTILES_OVERLAYS) {
+      if (map.getLayer(overlay.id)) {
+        map.setLayoutProperty(
+          overlay.id,
+          'visibility',
+          overlayVisibility[overlay.id] ? 'visible' : 'none'
+        )
+      }
+    }
+  }, [overlayVisibility, polygonOpacity, showPolygonLayer])
+
   const initMap = useCallback(() => {
     if (!mapContainer.current || mapRef.current) return
+
+    if (!pmtilesProtocolRef.current) {
+      const protocol = new Protocol()
+      maplibregl.addProtocol('pmtiles', protocol.tile)
+      pmtilesProtocolRef.current = protocol
+    }
 
     const map = new maplibregl.Map({
       container: mapContainer.current,
@@ -196,6 +453,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
     )
 
     map.on('load', () => {
+      // Add H3 layers immediately
       map.addSource('h3-grid', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -306,18 +564,123 @@ export function MapView({ mcdaResults }: MapViewProps) {
         },
       })
 
+      map.addSource('scenario-markers', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+
+      map.addLayer(
+        {
+          id: 'scenario-markers-muted',
+          type: 'circle',
+          source: 'scenario-markers',
+          filter: ['==', ['get', 'mode'], 'muted'],
+          paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 3, 12, 5, 15, 6],
+            'circle-color': MUTED_COLOR,
+            'circle-opacity': 0.2,
+            'circle-stroke-width': 1,
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-opacity': 0.3,
+          },
+        },
+        'evcp-markers'
+      )
+
+      map.addLayer(
+        {
+          id: 'scenario-markers-highlighted',
+          type: 'circle',
+          source: 'scenario-markers',
+          filter: ['==', ['get', 'mode'], 'highlighted'],
+          paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 5, 12, 7, 15, 9],
+            'circle-color': ['get', 'color'],
+            'circle-opacity': 0.55,
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-opacity': 0.7,
+          },
+        },
+        'evcp-markers'
+      )
+
+      // Use a canvas marker instead of an external image to avoid decoding errors
+      const markerSize = 32
+      const canvas = document.createElement('canvas')
+      canvas.width = markerSize
+      canvas.height = markerSize
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        // Draw a simple marker with softer colors
+        ctx.beginPath()
+        ctx.arc(markerSize / 2, markerSize / 2, markerSize / 2 - 2, 0, Math.PI * 2)
+        ctx.fillStyle = '#9fa1ffe8' // Softer indigo
+        ctx.fill()
+        ctx.strokeStyle = '#ffffff'
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+
+        // Draw a placeholder lightning bolt or simple shape
+        ctx.fillStyle = '#ffffff'
+        ctx.font = '14px sans-serif' // Smaller font for less intimidation
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText('⚡', markerSize / 2, markerSize / 2)
+
+        const imageData = ctx.getImageData(0, 0, markerSize, markerSize)
+        map.addImage(CHARGEPOINT_ICON_ID, imageData)
+      }
+
+      // Add PMTiles layers
+      for (const overlay of PMTILES_OVERLAYS) {
+        const sourceId = `pmtiles-${overlay.id}`
+        if (!map.getSource(sourceId)) {
+          map.addSource(sourceId, {
+            type: 'vector',
+            url: `pmtiles://${overlay.url}`,
+          })
+        }
+
+        if (!map.getLayer(overlay.id)) {
+          const visibility = overlayVisibility?.[overlay.id] ? 'visible' : 'none'
+          map.addLayer(buildOverlayLayer(overlay, sourceId, visibility))
+        }
+      }
+
       setMapReady(true)
     })
 
     map.on('click', 'h3-fill', (e) => {
-      if (!isSimulationModeRef.current) return
-      if (e.features && e.features.length > 0) {
-        const cell = e.features[0].properties?.h3_cell as string
-        selectH3Cell(cell)
-        setSelectedClickLocation({ lat: e.lngLat.lat, lng: e.lngLat.lng })
-        setSelectedPlacementCell(cell)
-        setShowChargerConfig(true)
+      if (!e.features || e.features.length === 0) return
+      const cell = e.features[0].properties?.h3_cell as string
+
+      const mcdaRow = mcdaResultsRef.current.find((r) => r.h3_cell === cell)
+
+      if (mcdaRow?.lsoa21cd) {
+        setSelectedLSOA(mcdaRow.lsoa21cd, mcdaRow.lsoa21nm ?? null, mcdaRow.borough_name ?? null)
       }
+
+      if (!isSimulationModeRef.current) return
+
+      if (mcdaRow) {
+        setPlacementCellData({
+          raw: mcdaRow.raw_values ?? {},
+          normalized: mcdaRow.criterion_values ?? {},
+          metadata: {
+            lsoa21cd: mcdaRow.lsoa21cd,
+            lsoa21nm: mcdaRow.lsoa21nm,
+            borough_name: mcdaRow.borough_name,
+          },
+        })
+      } else {
+        setPlacementCellData(null)
+      }
+
+      selectH3Cell(cell)
+      setSelectedClickLocation({ lat: e.lngLat.lat, lng: e.lngLat.lng })
+      setSelectedPlacementCell(cell)
+      setShowChargerConfig(true)
     })
 
     map.on('mouseenter', 'h3-fill', () => {
@@ -343,7 +706,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
 
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !map.isStyleLoaded()) return
+    if (!map || !isMapReady) return
 
     const filter: maplibregl.FilterSpecification = selectedPlacementCell
       ? ['==', ['get', 'h3_cell'], selectedPlacementCell]
@@ -374,6 +737,10 @@ export function MapView({ mcdaResults }: MapViewProps) {
   useEffect(() => {
     latestPlacementsRef.current = currentPlacements
   }, [currentPlacements])
+
+  useEffect(() => {
+    mcdaResultsRef.current = mcdaResults
+  }, [mcdaResults])
 
   useEffect(() => {
     const map = mapRef.current
@@ -413,6 +780,10 @@ export function MapView({ mcdaResults }: MapViewProps) {
       clearGlyphMarkers()
       mapRef.current?.remove()
       mapRef.current = null
+      if (pmtilesProtocolRef.current) {
+        maplibregl.removeProtocol('pmtiles')
+        pmtilesProtocolRef.current = null
+      }
     }
   }, [initMap, clearGlyphMarkers])
 
@@ -449,10 +820,10 @@ export function MapView({ mcdaResults }: MapViewProps) {
             rawValues,
             comparisonGlyph
               ? {
-                  h3Cell: comparisonGlyph.h3Cell,
-                  score: comparisonGlyph.score,
-                  rawValues: comparisonGlyph.rawValues,
-                }
+                h3Cell: comparisonGlyph.h3Cell,
+                score: comparisonGlyph.score,
+                rawValues: comparisonGlyph.rawValues,
+              }
               : undefined
           )
         )
@@ -480,6 +851,18 @@ export function MapView({ mcdaResults }: MapViewProps) {
     if (!map || !map.isStyleLoaded()) return
 
     const onMapClick = (e: maplibregl.MapMouseEvent) => {
+      const chargepointHits = map.queryRenderedFeatures(e.point, { layers: ['london-chargepoints'] })
+      if (chargepointHits.length > 0) {
+        const feature = chargepointHits[0]
+        const props = feature.properties || {}
+        const popupHtml = buildChargepointPopupHtml(props)
+        new maplibregl.Popup({ closeButton: true, className: 'chargepoint-popup' })
+          .setLngLat(e.lngLat)
+          .setHTML(popupHtml)
+          .addTo(map)
+        return
+      }
+
       if (isSimulationMode && selectedPlacementCell) {
         const hoveredPolygons = map.queryRenderedFeatures(e.point, { layers: ['h3-fill'] })
         if (hoveredPolygons.length === 0) {
@@ -498,10 +881,18 @@ export function MapView({ mcdaResults }: MapViewProps) {
     }
 
     map.on('click', onMapClick)
+
+    map.on('mouseenter', 'london-chargepoints', () => {
+      map.getCanvas().style.cursor = 'pointer'
+    })
+    map.on('mouseleave', 'london-chargepoints', () => {
+      map.getCanvas().style.cursor = isSimulationMode ? EVCP_CURSOR : ''
+    })
+
     return () => {
       map.off('click', onMapClick)
     }
-  }, [comparisonGlyph, isSimulationMode, selectedPlacementCell, setSelectedPlacementCell])
+  }, [buildChargepointPopupHtml, comparisonGlyph, isMapReady, isSimulationMode, selectedPlacementCell, setSelectedPlacementCell])
 
   // Update H3 grid when MCDA results change
   useEffect(() => {
@@ -542,28 +933,12 @@ export function MapView({ mcdaResults }: MapViewProps) {
     source.setData(geojson)
   }, [mcdaResults])
 
-  // Toggle polygon visibility.
+  // Sync polygon visibility, overlays, and opacity.
   useEffect(() => {
     const map = mapRef.current
     if (!map || !map.isStyleLoaded()) return
-
-    const visibility = showPolygonLayer ? 'visible' : 'none'
-    if (map.getLayer('h3-fill')) {
-      map.setLayoutProperty('h3-fill', 'visibility', visibility)
-    }
-    if (map.getLayer('h3-outline')) {
-      map.setLayoutProperty('h3-outline', 'visibility', visibility)
-    }
-  }, [showPolygonLayer])
-
-  // Keep polygon opacity in sync with slider control.
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map || !map.isStyleLoaded()) return
-    if (!map.getLayer('h3-fill')) return
-
-    map.setPaintProperty('h3-fill', 'fill-opacity', polygonOpacity)
-  }, [polygonOpacity])
+    applyLayerVisibility(map)
+  }, [applyLayerVisibility])
 
   // Draw a glyph layer with criterion-level bars or rose petals as canvas markers.
   useEffect(() => {
@@ -911,10 +1286,10 @@ export function MapView({ mcdaResults }: MapViewProps) {
               row.rawValues,
               comparisonGlyph
                 ? {
-                    h3Cell: comparisonGlyph.h3Cell,
-                    score: comparisonGlyph.score,
-                    rawValues: comparisonGlyph.rawValues,
-                  }
+                  h3Cell: comparisonGlyph.h3Cell,
+                  score: comparisonGlyph.score,
+                  rawValues: comparisonGlyph.rawValues,
+                }
                 : undefined
             )
           )
@@ -968,12 +1343,61 @@ export function MapView({ mcdaResults }: MapViewProps) {
     syncEvcpMarkers(currentPlacements)
   }, [currentPlacements, isMapReady, syncEvcpMarkers])
 
+  const syncScenarioMarkers = useCallback(() => {
+    const map = mapRef.current
+    if (!map) return
+
+    const source = map.getSource('scenario-markers') as maplibregl.GeoJSONSource | undefined
+    if (!source) return
+
+    const renderList = buildScenarioRenderList(
+      scenarios.map((s) => s.id),
+      comparedScenarioIds,
+      visibleScenarioIds
+    )
+
+    const features = renderList.flatMap((info) => {
+      const scenario = scenarios.find((s) => s.id === info.id)
+      if (!scenario) return []
+      return scenario.placements.flatMap((p) => {
+        try {
+          const [lat, lng] = getH3Center(p.h3Cell)
+          return [
+            {
+              type: 'Feature' as const,
+              geometry: { type: 'Point' as const, coordinates: [lng, lat] },
+              properties: {
+                scenario_id: info.id,
+                scenario_name: scenario.name,
+                mode: info.mode,
+                color: info.color,
+                h3_cell: p.h3Cell,
+                charger_type: p.chargerType,
+                charger_count: p.chargerCount,
+              },
+            },
+          ]
+        } catch {
+          return []
+        }
+      })
+    })
+
+    source.setData({ type: 'FeatureCollection', features })
+  }, [scenarios, comparedScenarioIds, visibleScenarioIds])
+
+  useEffect(() => {
+    if (!isMapReady) return
+    syncScenarioMarkers()
+  }, [isMapReady, syncScenarioMarkers])
+
   // Re-apply marker data if the style reloads to avoid losing source data visibility.
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
 
     const handleStyleData = () => {
+      applyLayerVisibility(map)
       syncEvcpMarkers(latestPlacementsRef.current)
     }
 
@@ -981,145 +1405,188 @@ export function MapView({ mcdaResults }: MapViewProps) {
     return () => {
       map.off('styledata', handleStyleData)
     }
-  }, [syncEvcpMarkers])
+  }, [applyLayerVisibility, syncEvcpMarkers])
 
   return (
     <div className="relative flex-1">
       <div ref={mapContainer} className="w-full h-full" />
 
-      <div className="absolute top-24 left-3 z-10">
-        <button
-          onClick={() => {
-            const next = !isSimulationMode
-            setSimulationMode(next)
-            if (!next) {
-              setShowChargerConfig(false)
-              setSelectedClickLocation(null)
-              setSelectedPlacementCell(null)
-              selectH3Cell(null)
-            }
-          }}
-          className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold shadow-lg transition-colors ${
-            isSimulationMode
-              ? 'bg-amber-500 text-white border-amber-600'
-              : 'bg-white/95 text-slate-700 border-slate-300 hover:bg-slate-50'
-          }`}
-          title="Toggle EVCP placement mode"
-        >
-          <Zap className="h-3.5 w-3.5" strokeWidth={2.5} />
-          {isSimulationMode ? 'Simulation: ON' : 'Simulate EVCP Placement'}
-        </button>
+      <div className="absolute top-2 left-14 z-10">
+        <div className="inline-flex overflow-hidden rounded-lg border border-slate-300 shadow-lg">
+          <button
+            onClick={() => {
+              const next = !isSimulationMode
+              setSimulationMode(next)
+              if (!next) {
+                setShowChargerConfig(false)
+                setSelectedClickLocation(null)
+                setSelectedPlacementCell(null)
+                selectH3Cell(null)
+              }
+            }}
+            className={`inline-flex items-center gap-2 px-3 py-2 text-xs font-bold transition-colors ${isSimulationMode
+              ? 'bg-amber-500 text-white'
+              : 'bg-white/95 text-slate-700 hover:bg-slate-50'
+              }`}
+            title="Toggle EVCP placement mode"
+          >
+            <Zap className="h-3.5 w-3.5" strokeWidth={2.5} />
+            {isSimulationMode ? 'Simulation: ON' : 'Simulate EVCP Placement'}
+          </button>
+          <label className="inline-flex items-center gap-2 border-l border-slate-300 bg-white/95 px-3 py-2 text-[11px] font-semibold text-slate-600">
+            <input
+              type="checkbox"
+              checked={showTooltips}
+              onChange={(e) => setShowTooltips(e.target.checked)}
+              className="rounded border-slate-300"
+            />
+            Tooltips
+          </label>
+        </div>
       </div>
 
       {/* Layer Controls */}
-      <div className="absolute top-4 right-4 bg-white/95 backdrop-blur-sm rounded-lg shadow-lg p-3 border border-slate-200 min-w-[220px] z-10">
-        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
-          Layers
-        </div>
+      <div className="absolute top-4 right-4 z-10">
+        {showLayerPanel ? (
+          <div className="bg-white/95 backdrop-blur-sm rounded-lg shadow-lg p-3 border border-slate-200 min-w-[220px]">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Layers</div>
+              <button
+                type="button"
+                onClick={() => setShowLayerPanel(false)}
+                className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 text-slate-500 hover:bg-slate-50"
+                aria-label="Hide layers panel"
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+              </button>
+            </div>
 
-        <label className="flex items-center gap-2 text-xs text-slate-700 mb-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={showPolygonLayer}
-            onChange={(e) => setShowPolygonLayer(e.target.checked)}
-            className="rounded border-slate-300"
-          />
-          MCDA Final Score
-        </label>
+            <label className="flex items-center gap-2 text-xs text-slate-700 mb-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showPolygonLayer}
+                onChange={(e) => setShowPolygonLayer(e.target.checked)}
+                className="rounded border-slate-300"
+              />
+              MCDA Final Score
+            </label>
 
-        <div className="mb-2">
-          <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
-            <span>Polygon opacity</span>
-            <span className="font-mono text-slate-600">{Math.round(polygonOpacity * 100)}%</span>
+            <div className="mb-2">
+              <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
+                <span>Polygon opacity</span>
+                <span className="font-mono text-slate-600">{Math.round(polygonOpacity * 100)}%</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={Math.round(polygonOpacity * 100)}
+                onChange={(e) => setPolygonOpacity(Number(e.target.value) / 100)}
+                disabled={!showPolygonLayer}
+                className="w-full accent-slate-700"
+                aria-label="MCDA polygon opacity"
+              />
+            </div>
+
+            <label className="flex items-center gap-2 text-xs text-slate-700 mb-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showGlyphLayer}
+                onChange={(e) => setShowGlyphLayer(e.target.checked)}
+                className="rounded border-slate-300"
+              />
+              Glyph layer
+            </label>
+
+            <div className="mt-2">
+              <div className="text-[10px] text-slate-500 mb-1">Overlays</div>
+              <div className="flex flex-col gap-2">
+                {PMTILES_OVERLAYS.filter((o) => o.id !== 'lsoa-fills').map((overlay) => (
+                  <label key={overlay.id} className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={overlayVisibility[overlay.id] ?? false}
+                      onChange={(e) =>
+                        setOverlayVisibility((prev) => ({
+                          ...prev,
+                          [overlay.id]: e.target.checked,
+                        }))
+                      }
+                      className="rounded border-slate-300"
+                    />
+                    {overlay.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-2">
+              <div className="text-[10px] text-slate-500 mb-1">Glyph type</div>
+              <select
+                value={glyphType}
+                onChange={(e) => setGlyphType(e.target.value as 'rose' | 'bars')}
+                className="w-full text-xs rounded-md border border-slate-300 bg-white px-2 py-1"
+                disabled={!showGlyphLayer}
+              >
+                <option value="bars">Bar chart</option>
+                <option value="rose">Rose chart</option>
+              </select>
+            </div>
+
+            <div className="mt-2">
+              <div className="text-[10px] text-slate-500 mb-1">Glyph aggregation</div>
+              <select
+                value={glyphAggregation}
+                onChange={(e) => {
+                  const value = e.target.value
+                  if (value === 'auto') {
+                    setGlyphAggregation('auto')
+                  } else {
+                    setGlyphAggregation(Number(value) as 6 | 7 | 8 | 9 | 10)
+                  }
+                }}
+                className="w-full text-xs rounded-md border border-slate-300 bg-white px-2 py-1"
+                disabled={!showGlyphLayer}
+              >
+                <option value="auto">Auto (current result resolution)</option>
+                <option value="10">H3 r10 (finest)</option>
+                <option value="9">H3 r9</option>
+                <option value="8">H3 r8</option>
+                <option value="7">H3 r7</option>
+                <option value="6">H3 r6 (coarse)</option>
+              </select>
+            </div>
+
+            <div className="mt-2">
+              {/* <div className="text-[10px] text-slate-500 mb-1">Glyph size</div>
+              <div className="text-xs text-slate-700">
+                {(glyphSizeScale * 100).toFixed(0)}%
+              </div> */}
+              {/* <div className="text-[10px] text-slate-500 mt-0.5">
+                Hold Shift + scroll to resize
+              </div> */}
+            </div>
+
+            <div className="mt-2 text-[10px] text-slate-500">
+              Pattern fill = cost criterion
+            </div>
+            {/* {showGlyphLayer && (
+              <div className="mt-1 text-[10px] text-slate-500">
+                Click a glyph to compare. Click again or empty map to clear.
+              </div>
+            )} */}
           </div>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            step={1}
-            value={Math.round(polygonOpacity * 100)}
-            onChange={(e) => setPolygonOpacity(Number(e.target.value) / 100)}
-            disabled={!showPolygonLayer}
-            className="w-full accent-slate-700"
-            aria-label="MCDA polygon opacity"
-          />
-        </div>
-
-        <label className="flex items-center gap-2 text-xs text-slate-700 mb-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={showGlyphLayer}
-            onChange={(e) => setShowGlyphLayer(e.target.checked)}
-            className="rounded border-slate-300"
-          />
-          Glyph layer
-        </label>
-
-        <label className="flex items-center gap-2 text-xs text-slate-700 mb-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={showTooltips}
-            onChange={(e) => setShowTooltips(e.target.checked)}
-            className="rounded border-slate-300"
-          />
-          Show tooltips
-        </label>
-
-        <div className="mt-2">
-          <div className="text-[10px] text-slate-500 mb-1">Glyph type</div>
-          <select
-            value={glyphType}
-            onChange={(e) => setGlyphType(e.target.value as 'bars' | 'rose')}
-            className="w-full text-xs rounded-md border border-slate-300 bg-white px-2 py-1"
-            disabled={!showGlyphLayer}
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowLayerPanel(true)}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white/95 text-slate-600 shadow-lg hover:bg-slate-50"
+            aria-label="Show layers panel"
           >
-            <option value="bars">Bar chart</option>
-            <option value="rose">Rose chart (petal length)</option>
-          </select>
-        </div>
-
-        <div className="mt-2">
-          <div className="text-[10px] text-slate-500 mb-1">Glyph aggregation</div>
-          <select
-            value={glyphAggregation}
-            onChange={(e) => {
-              const value = e.target.value
-              if (value === 'auto') {
-                setGlyphAggregation('auto')
-              } else {
-                setGlyphAggregation(Number(value) as 6 | 7 | 8 | 9 | 10)
-              }
-            }}
-            className="w-full text-xs rounded-md border border-slate-300 bg-white px-2 py-1"
-            disabled={!showGlyphLayer}
-          >
-            <option value="auto">Auto (current result resolution)</option>
-            <option value="10">H3 r10 (finest)</option>
-            <option value="9">H3 r9</option>
-            <option value="8">H3 r8</option>
-            <option value="7">H3 r7</option>
-            <option value="6">H3 r6 (coarse)</option>
-          </select>
-        </div>
-
-        <div className="mt-2">
-          {/* <div className="text-[10px] text-slate-500 mb-1">Glyph size</div>
-          <div className="text-xs text-slate-700">
-            {(glyphSizeScale * 100).toFixed(0)}%
-          </div> */}
-          {/* <div className="text-[10px] text-slate-500 mt-0.5">
-            Hold Shift + scroll to resize
-          </div> */}
-        </div>
-
-        <div className="mt-2 text-[10px] text-slate-500">
-          Pattern fill = cost criterion
-        </div>
-        {/* {showGlyphLayer && (
-          <div className="mt-1 text-[10px] text-slate-500">
-            Click a glyph to compare. Click again or empty map to clear.
-          </div>
-        )} */}
+            <SlidersHorizontal className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       {/* Glyph Legend */}
@@ -1158,7 +1625,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
       )}
 
       {/* Color Legend */}
-      <div className="absolute bottom-8 right-4 bg-white/90 backdrop-blur-sm rounded-lg shadow-lg p-3 border border-slate-200">
+      <div className="absolute bottom-10 right-4 bg-white/90 backdrop-blur-sm rounded-lg shadow-lg p-3 border border-slate-200">
         <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
           Suitability Score
         </div>
@@ -1186,9 +1653,11 @@ export function MapView({ mcdaResults }: MapViewProps) {
               const [lat, lng] = getH3Center(selectedH3Cell)
               return { lat, lng }
             })()}
+            cellData={placementCellData ?? undefined}
             onClose={() => {
               setShowChargerConfig(false)
               setSelectedClickLocation(null)
+              setPlacementCellData(null)
               setSelectedPlacementCell(null)
               selectH3Cell(null)
             }}

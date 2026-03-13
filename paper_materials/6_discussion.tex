@@ -1,0 +1,51 @@
+% 6_discussion.tex
+
+\section{Discussion}
+\label{sec:discussion}
+
+%--------------------------------------------------------------
+\subsection{Contributions to Visual Analytics for Spatial Decision Support}
+\label{sec:disc-va}
+
+The platform demonstrates a visual analytics design pattern that extends the conventional GIS-MCDA workflow in two directions. First, it closes the loop between site selection and impact evaluation: rather than treating suitability scoring as the terminal analytical step, the system enables planners to test the consequences of acting on suitability rankings by simulating charger deployments and observing their estimated effects. Second, it introduces a temporal dimension through the DFES overlay, which transforms static impact estimates into forward-looking assessments by revealing when a deployment becomes insufficient under different demand trajectories. Together, these extensions shift the analytical paradigm from ``where is the best location?'' to ``what happens if we build here, and for how long will it be sufficient?''---a question more closely aligned with the iterative, uncertain nature of real infrastructure planning.
+
+The coordinated multiple-view architecture is central to supporting this extended workflow. The tight coupling between the Weight Laboratory, Spatial View, Impact Panel, and DFES panel enables rapid analytical iteration: a weight change propagates through the MCDA scoring, updates the map, and (if placements exist) cascades into the impact and temporal views within a single interaction cycle. This immediacy supports the exploratory, hypothesis-driven mode of inquiry that visual analytics is designed to facilitate~\cite{keim2008visual}.
+
+%--------------------------------------------------------------
+\subsection{Role of Multi-Criteria Method Comparison}
+\label{sec:disc-methods}
+
+Offering WSM, WPM, and TOPSIS within a single interface serves as an implicit sensitivity analysis. Rankings that remain stable across methods are robust to aggregation assumptions; rankings that shift---as illustrated in the use case where WPM penalised a location with low grid headroom more severely than WSM---reveal criteria that act as structural constraints rather than compensable factors. This capability has practical value for planning: it helps distinguish ``universally good'' locations from those whose attractiveness depends on how trade-offs are modelled.
+
+The integration of AHP alongside direct weight manipulation similarly broadens the analytical space. AHP provides a structured, theoretically grounded procedure for weight derivation that can be documented and audited, while direct manipulation enables rapid exploratory adjustment. The ability to switch between these modes---and to observe the spatial consequences immediately---supports both the rigour expected in formal planning processes and the fluidity required for exploratory analysis.
+
+%--------------------------------------------------------------
+\subsection{Client-Side Architecture}
+\label{sec:disc-architecture}
+
+Running the entire analytical pipeline client-side in DuckDB-WASM offers practical advantages. The system can be deployed as a static web application without backend infrastructure, reducing operational cost and simplifying distribution to planning teams. Interactive performance is adequate: the MCDA scoring query over 118,000 rows completes in under 200\,ms on modern hardware, and the H3 hierarchical aggregation for multi-scale visualisation further reduces rendering load.
+
+The use of H3 hexagonal indexing as the spatial unit provides several benefits beyond those described in Section~\ref{sec:spatial-data}. The uniform cell geometry eliminates the area distortion present in administrative boundaries (e.g., LSOAs), enabling consistent spatial aggregation and comparison. The hierarchical structure supports zoom-dependent rendering without pre-computed tile pyramids. The six-neighbour topology supports the 1-ring population estimation in the impact model (Section~\ref{sec:demand}), providing a natural definition of ``service area'' for a charger deployment.
+
+However, the client-side architecture also introduces constraints. The data must be pre-processed into Parquet files and pre-normalised before deployment, limiting the system's ability to incorporate new data sources without a rebuild pipeline. Memory consumption scales with dataset size; the current 118,000-cell dataset consumes approximately 50\,MB of browser memory, which is manageable on desktop devices but may be restrictive on mobile platforms. Future work could explore progressive loading strategies or server-assisted caching for larger study areas.
+
+%--------------------------------------------------------------
+\subsection{Limitations of the Impact Model}
+\label{sec:disc-limitations}
+
+The impact estimation model (Section~\ref{sec:impact}) is designed for interactive scenario exploration rather than precise forecasting. Several simplifications constrain its applicability:
+
+\begin{itemize}[nosep]
+    \item \textbf{Static assumptions}: EV adoption rate ($\alpha_{\text{EV}} = 0.15$), daily charging probability ($\alpha_{\text{charge}} = 0.3$), and grid emission factor ($\text{EF}_{\text{grid}} = 0.233$) are fixed constants. In practice, these vary over time and by location, and the decarbonisation of the electricity grid will reduce the carbon benefit of EV charging.
+    \item \textbf{No network effects}: the model treats each placement independently, without accounting for how multiple nearby deployments might compete for demand or collectively affect the local distribution network.
+    \item \textbf{Headroom estimation}: substation capacity is estimated from a normalised headroom score rather than from engineering-grade network data. This provides a useful directional signal but should not be used for grid connection assessments.
+    \item \textbf{Demand model}: the chain of demographic ratios in the demand equation (Eq.~\ref{eq:demand}) is a rough approximation; actual charging demand depends on trip patterns, dwell times, and driver behaviour that are not captured.
+\end{itemize}
+
+\noindent These limitations are acceptable in the context of a visual analytics tool whose purpose is to enable comparative scenario exploration rather than to produce definitive engineering assessments. The transparency of the model---with clearly stated assumptions and visible equations---allows domain experts to evaluate its suitability for their planning context.
+
+%--------------------------------------------------------------
+\subsection{Generalisability}
+\label{sec:disc-generalisability}
+
+Although demonstrated for EVCP siting in London, the design pattern generalises to other spatial planning problems that share three characteristics: (1) a multi-criteria evaluation of candidate locations, (2) an estimable impact of interventions at selected locations, and (3) a temporal demand projection against which the intervention can be stress-tested. Examples include solar panel deployment, public transit stop placement, urban greenspace allocation, and healthcare facility siting. The modular architecture---where the MCDA engine, impact model, and temporal overlay are independent components linked through a shared spatial key (the H3 cell)---supports adaptation to new domains by replacing the criteria layers, impact equations, and temporal reference data.

@@ -1,0 +1,57 @@
+% main.tex
+% Visual Analytics for Multi-Criteria EV Charging Infrastructure Siting
+% and Scenario Exploration
+
+\documentclass[journal]{IEEEtran}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{subcaption}
+\usepackage{verbatim}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  citecolor=blue!70!black,
+  urlcolor=blue!70!black
+}
+
+\title{Interactive Visual Analytics for Multi-Criteria EV Charging Infrastructure Siting and Scenario Exploration}
+
+\author{
+  \IEEEauthorblockN{Author Names}
+  \IEEEauthorblockA{Affiliation \\
+  Email}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Planning urban infrastructure often requires balancing competing objectives such as accessibility, demand, grid capacity, and social equity. Multi-criteria decision analysis (MCDA) is frequently used to support such planning tasks, yet traditional workflows remain largely static and opaque, limiting stakeholders' ability to explore trade-offs and understand how modelling assumptions influence outcomes. We present a visual analytics platform that integrates interactive multi-criteria suitability analysis with real-time what-if scenario evaluation for electric vehicle charging point (EVCP) siting. The system combines coordinated visual views---including parallel coordinate weight controls, hexagonal spatial suitability maps with multi-variate glyph overlays, and diagnostic panels---enabling planners to interactively adjust criterion weights (via direct manipulation or Analytic Hierarchy Process pairwise comparison), examine ranking sensitivity, and explore the spatial implications of alternative planning priorities. Beyond site selection, the platform incorporates a lightweight impact estimation module that computes energy delivery, carbon reduction, grid headroom, and socio-demographic coverage for proposed charger deployments. These impact estimates are overlaid on Distribution Future Energy Scenarios (DFES) timeseries projections, transforming passive reference data into temporal stress tests that reveal when proposed infrastructure becomes insufficient under different demand pathways. Users can save, compare, and export complete planning scenarios via a radar chart comparison view. The entire analytical pipeline---including MCDA scoring via Weighted Sum, Weighted Product, and TOPSIS methods---runs client-side in DuckDB-WASM over approximately 118,000 H3 hexagonal cells, eliminating server infrastructure requirements while maintaining interactive response times. We demonstrate the approach through a case study of charging infrastructure planning in Greater London using heterogeneous open datasets. The results illustrate how interactive visual analytics can support transparent exploration of planning trade-offs and facilitate more informed infrastructure decision-making.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Visual analytics, multi-criteria decision analysis, electric vehicle charging infrastructure, spatial decision support, what-if analysis, DuckDB, H3 hexagonal index
+\end{IEEEkeywords}
+
+\input{1_introduction}
+\input{2_related_work}
+\input{3_methodology}
+\input{4_system_design}
+\input{5_use_case}
+\input{6_discussion}
+\input{7_conclusion}
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

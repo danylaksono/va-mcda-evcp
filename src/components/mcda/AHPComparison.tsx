@@ -1,6 +1,13 @@
-import React, { useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { useMCDAStore } from '@/store/mcda-store'
+import { useScenarioStore } from '@/store/scenario-store'
 import { solveAHP } from '@/analysis/ahp-solver'
+import type { AHPComparison as AHPComparisonType } from '@/analysis/types'
+import {
+  buildScenarioRenderList,
+  getDraftStyle,
+  type ScenarioRenderInfo,
+} from '@/scenarios/scenario-styles'
 
 const MIN_ZOOM = 0.45
 const MAX_ZOOM = 5
@@ -16,10 +23,8 @@ const AHP_SCALE_LABELS: Record<number, string> = {
 export function AHPComparison() {
   const criteria = useMCDAStore((s) => s.criteria)
   const comparisons = useMCDAStore((s) => s.comparisons)
-  const addComparison = useMCDAStore((s) => s.addComparison)
+  const setComparisons = useMCDAStore((s) => s.setComparisons)
   const updateComparison = useMCDAStore((s) => s.updateComparison)
-  const removeComparison = useMCDAStore((s) => s.removeComparison)
-  const clearComparisons = useMCDAStore((s) => s.clearComparisons)
   const applyAHPWeights = useMCDAStore((s) => s.applyAHPWeights)
   const ahpMetrics = useMCDAStore((s) => s.ahpMetrics)
 
@@ -30,11 +35,70 @@ export function AHPComparison() {
   const [editingValue, setEditingValue] = useState('1')
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 })
   const [panState, setPanState] = useState<{ pointerId: number; pointerX: number; pointerY: number; baseX: number; baseY: number } | null>(null)
+  const [hideDefaults, setHideDefaults] = useState(true)
+
+  const scenarios = useScenarioStore((s) => s.scenarios)
+  const visibleScenarioIds = useScenarioStore((s) => s.visibleScenarioIds)
+  const comparedScenarioIds = useScenarioStore((s) => s.comparedScenarioIds)
 
   const activeCriteria = criteria.filter((c) => c.active)
   const requiredComparisons = Math.max(0, (activeCriteria.length * (activeCriteria.length - 1)) / 2)
   const completionRatio = requiredComparisons > 0 ? comparisons.length / requiredComparisons : 0
   const completionPct = Math.min(100, completionRatio * 100)
+
+  const activeCriteriaKey = activeCriteria.map((c) => c.id).sort().join(',')
+
+  useEffect(() => {
+    const ids = activeCriteriaKey.split(',').filter(Boolean)
+    if (ids.length < 2) return
+
+    const current = useMCDAStore.getState().comparisons
+    const expected = (ids.length * (ids.length - 1)) / 2
+
+    if (current.length === expected) {
+      const activeSet = new Set(ids)
+      const allValid = current.every(
+        (c) => activeSet.has(c.criterion1) && activeSet.has(c.criterion2)
+      )
+      if (allValid) return
+    }
+
+    const allPairs: AHPComparisonType[] = []
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        const c1 = ids[i]
+        const c2 = ids[j]
+        const existing = current.find(
+          (comp) =>
+            (comp.criterion1 === c1 && comp.criterion2 === c2) ||
+            (comp.criterion1 === c2 && comp.criterion2 === c1)
+        )
+        allPairs.push({
+          criterion1: c1,
+          criterion2: c2,
+          ratio: existing
+            ? existing.criterion1 === c1 ? existing.ratio : 1 / existing.ratio
+            : 1,
+        })
+      }
+    }
+
+    setComparisons(allPairs)
+  }, [activeCriteriaKey, comparisons.length, setComparisons])
+
+  const modifiedCount = comparisons.filter((c) => Math.abs(c.ratio - 1) > 1e-6).length
+
+  function isCompVisible(comp: AHPComparisonType) {
+    if (!hideDefaults) return true
+    if (Math.abs(comp.ratio - 1) > 1e-6) return true
+    if (
+      selectedPair &&
+      ((selectedPair[0] === comp.criterion1 && selectedPair[1] === comp.criterion2) ||
+        (selectedPair[0] === comp.criterion2 && selectedPair[1] === comp.criterion1))
+    )
+      return true
+    return false
+  }
 
   const liveMetrics = useMemo(() => {
     return solveAHP(criteria, comparisons)
@@ -42,27 +106,38 @@ export function AHPComparison() {
   
   const currentWeights = liveMetrics.weights
 
-  // Mock alternative archetypes to show weight influence
-  const alternatives = useMemo(() => {
-    return [
-      { id: '1', name: 'High Demand', color: '#ef4444', scores: activeCriteria.reduce((acc, c) => ({...acc, [c.id]: Math.random() * 0.5 + (c.category === 'demand' ? 0.5 : 0)}), {} as Record<string, number>) },
-      { id: '2', name: 'Equity Focus', color: '#eab308', scores: activeCriteria.reduce((acc, c) => ({...acc, [c.id]: Math.random() * 0.5 + (c.category === 'equity' ? 0.5 : 0)}), {} as Record<string, number>) },
-      { id: '3', name: 'Balanced', color: '#10b981', scores: activeCriteria.reduce((acc, c) => ({...acc, [c.id]: Math.random() * 0.4 + 0.3}), {} as Record<string, number>) },
-      { id: '4', name: 'Infrastructure', color: '#6366f1', scores: activeCriteria.reduce((acc, c) => ({...acc, [c.id]: Math.random() * 0.5 + (c.category === 'infrastructure' ? 0.5 : 0)}), {} as Record<string, number>) }
-    ]
-  }, [activeCriteria.length]) // re-generate only if active criteria count changes
+  const scenarioRenderList = useMemo<ScenarioRenderInfo[]>(
+    () =>
+      buildScenarioRenderList(
+        scenarios.map((s) => s.id),
+        comparedScenarioIds,
+        visibleScenarioIds
+      ),
+    [scenarios, comparedScenarioIds, visibleScenarioIds]
+  )
+
+  const scenarioParticles = useMemo(() => {
+    return scenarioRenderList.map((info) => {
+      const scenario = scenarios.find((s) => s.id === info.id)
+      if (!scenario) return null
+      return {
+        id: info.id,
+        name: scenario.name,
+        color: info.style.stroke,
+        opacity: info.style.opacity,
+        radius: info.mode === 'highlighted' ? 6 : 4,
+        labelVisible: info.mode === 'highlighted',
+        scores: scenario.weights,
+      }
+    }).filter(Boolean) as Array<{
+      id: string; name: string; color: string; opacity: number;
+      radius: number; labelVisible: boolean; scores: Record<string, number>
+    }>
+  }, [scenarioRenderList, scenarios])
 
 
   function handleCellClick(c1: string, c2: string) {
     if (c1 === c2) return
-    const existing = comparisons.find(
-      (comp) =>
-        (comp.criterion1 === c1 && comp.criterion2 === c2) ||
-        (comp.criterion1 === c2 && comp.criterion2 === c1)
-    )
-    if (!existing) {
-      addComparison({ criterion1: c1, criterion2: c2, ratio: 1 })
-    }
     setSelectedPair([c1, c2])
   }
 
@@ -97,6 +172,18 @@ export function AHPComparison() {
     setPendingNode(null)
     setSelectedPair(null)
     setEditingCell(null)
+  }
+
+  function handleResetComparisons() {
+    const ids = activeCriteria.map((c) => c.id)
+    const allPairs: AHPComparisonType[] = []
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        allPairs.push({ criterion1: ids[i], criterion2: ids[j], ratio: 1 })
+      }
+    }
+    setComparisons(allPairs)
+    setSelectedPair(null)
   }
 
   function startCellEdit(rowId: string, colId: string) {
@@ -232,12 +319,38 @@ export function AHPComparison() {
     })
   )
 
+  const draftParticle = useMemo(() => {
+    const draftStyle = getDraftStyle()
+    let tx = 0, ty = 0, tw = 0
+    activeCriteria.forEach((c) => {
+      const weight = currentWeights[c.id] || 0
+      const score = c.weight
+      const pull = weight * score
+      const pos = nodePositions.get(c.id)
+      if (pos) {
+        tx += pos.x * pull
+        ty += pos.y * pull
+        tw += pull
+      }
+    })
+    return {
+      id: 'draft',
+      name: 'Current',
+      color: draftStyle.stroke,
+      opacity: draftStyle.opacity,
+      radius: 8,
+      labelVisible: true,
+      x: tw === 0 ? center : tx / tw,
+      y: tw === 0 ? center : ty / tw,
+    }
+  }, [activeCriteria, currentWeights, nodePositions, center])
+
   const particlePositions = useMemo(() => {
-    return alternatives.map((alt) => {
+    return scenarioParticles.map((sp) => {
       let tx = 0, ty = 0, tw = 0
       activeCriteria.forEach((c) => {
         const weight = currentWeights[c.id] || 0
-        const score = alt.scores[c.id] || 0
+        const score = sp.scores[c.id] || 0
         const pull = weight * score
         const pos = nodePositions.get(c.id)
         if (pos) {
@@ -246,10 +359,10 @@ export function AHPComparison() {
           tw += pull
         }
       })
-      if (tw === 0) return { ...alt, x: center, y: center }
-      return { ...alt, x: tx / tw, y: ty / tw }
+      if (tw === 0) return { ...sp, x: center, y: center }
+      return { ...sp, x: tx / tw, y: ty / tw }
     })
-  }, [alternatives, activeCriteria, currentWeights, nodePositions, center])
+  }, [scenarioParticles, activeCriteria, currentWeights, nodePositions, center])
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
@@ -315,6 +428,7 @@ export function AHPComparison() {
             <g transform={`translate(${view.x} ${view.y}) scale(${view.scale})`}>
             <g id="links">
               {comparisons.map((comp, idx) => {
+                if (!isCompVisible(comp)) return null
                 const p1 = nodePositions.get(comp.criterion1)
                 const p2 = nodePositions.get(comp.criterion2)
                 if (!p1 || !p2) return null
@@ -324,6 +438,8 @@ export function AHPComparison() {
                   ((selectedPair[0] === comp.criterion1 && selectedPair[1] === comp.criterion2) ||
                     (selectedPair[0] === comp.criterion2 && selectedPair[1] === comp.criterion1))
 
+                const isDefault = Math.abs(comp.ratio - 1) <= 1e-6
+
                 return (
                   <g key={idx}>
                     <line
@@ -331,10 +447,10 @@ export function AHPComparison() {
                       y1={p1.y}
                       x2={p2.x}
                       y2={p2.y}
-                      stroke={isSelected ? '#3b82f6' : '#cbd5e1'}
+                      stroke={isSelected ? '#3b82f6' : isDefault ? '#e2e8f0' : '#cbd5e1'}
                       strokeWidth={isSelected ? 2.5 : 1.75}
                       className="transition-all duration-300"
-                      strokeDasharray={isSelected ? 'none' : '4'}
+                      strokeDasharray={isSelected ? 'none' : isDefault ? '2 4' : '4'}
                     />
                   </g>
                 )
@@ -375,17 +491,41 @@ export function AHPComparison() {
               })}
             </g>
             <g id="particles">
-              {particlePositions.map((alt, i) => (
-                <g key={i} transform={`translate(${alt.x}, ${alt.y})`} className="transition-transform duration-500 ease-out pointer-events-none">
-                  <circle r={4.5} fill={alt.color} stroke="#fff" strokeWidth={1.2} style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))' }} />
-                  <text dy="-10" textAnchor="middle" className="text-[9px] font-bold fill-slate-700 shadow-sm">
-                    {alt.name}
-                  </text>
+              {particlePositions.map((sp) => (
+                <g key={sp.id} transform={`translate(${sp.x}, ${sp.y})`} className="transition-transform duration-500 ease-out pointer-events-none">
+                  <circle
+                    r={sp.radius}
+                    fill={sp.color}
+                    fillOpacity={sp.opacity}
+                    stroke="#fff"
+                    strokeWidth={sp.labelVisible ? 1.2 : 0.6}
+                    style={{ filter: sp.labelVisible ? 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))' : 'none' }}
+                  />
+                  {sp.labelVisible && (
+                    <text dy={-(sp.radius + 4)} textAnchor="middle" className="text-[8px] font-bold fill-slate-600">
+                      {sp.name}
+                    </text>
+                  )}
                 </g>
               ))}
+              {/* Draft particle (always on top) */}
+              <g transform={`translate(${draftParticle.x}, ${draftParticle.y})`} className="transition-transform duration-500 ease-out pointer-events-none">
+                <circle
+                  r={draftParticle.radius}
+                  fill={draftParticle.color}
+                  fillOpacity={draftParticle.opacity}
+                  stroke="#fff"
+                  strokeWidth={1.5}
+                  style={{ filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.25))' }}
+                />
+                <text dy={-(draftParticle.radius + 4)} textAnchor="middle" className="text-[9px] font-bold fill-slate-800">
+                  {draftParticle.name}
+                </text>
+              </g>
             </g>
             <g id="pucks">
               {comparisons.map((comp, idx) => {
+                if (!isCompVisible(comp)) return null
                 const p1 = nodePositions.get(comp.criterion1)
                 const p2 = nodePositions.get(comp.criterion2)
                 if (!p1 || !p2) return null
@@ -447,14 +587,28 @@ export function AHPComparison() {
             </g>
           </svg>
           <div className="absolute top-2 right-2 flex flex-col items-end gap-1">
+          <button
+            type="button"
+            onClick={() => setHideDefaults((v) => !v)}
+            className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-semibold shadow-sm transition-colors ${
+              hideDefaults
+                ? 'border-brand-300 bg-brand-50 text-brand-700'
+                : 'border-slate-200 bg-white/90 text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <span className={`inline-block h-1.5 w-1.5 rounded-full ${hideDefaults ? 'bg-brand-500' : 'bg-slate-300'}`} />
+            {hideDefaults
+              ? `Showing ${modifiedCount} modified`
+              : `Showing all ${comparisons.length}`}
+          </button>
           {pendingNode && (
             <div className="text-[10px] bg-brand-100 text-brand-700 px-2 py-1 rounded shadow-sm">
-              Select another node to compare
+              Click another node to select that pair
             </div>
           )}
           {!pendingNode && comparisons.length > 0 && (
              <div className="text-[10px] text-slate-500 bg-white/85 px-2 py-1 rounded shadow-sm">
-               Drag the blue puck to adjust weight
+               Drag any puck to adjust the comparison ratio
              </div>
           )}
           {/* <div className="text-[9px] text-slate-500 bg-white/85 px-2 py-1 rounded shadow-sm">
@@ -647,8 +801,8 @@ export function AHPComparison() {
         >
           Apply AHP Weights
         </button>
-        <button onClick={clearComparisons} className="btn-secondary text-xs">
-          Clear
+        <button onClick={handleResetComparisons} className="btn-secondary text-xs">
+          Reset
         </button>
       </div>
     </div>

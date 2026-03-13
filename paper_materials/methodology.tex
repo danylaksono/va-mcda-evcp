@@ -17,7 +17,7 @@ The study area (Greater London) is discretised into $n \approx 118{,}000$ H3 hex
 \mathbf{x}_h = \bigl(x_{h,1},\; x_{h,2},\; \ldots,\; x_{h,m}\bigr)
 \end{equation}
 
-\noindent All criterion values are pre-normalised to $[0, 1]$ using min-max normalisation prior to ingestion, ensuring deterministic and reproducible scoring without runtime normalisation cost. Table~\ref{tab:criteria} lists the nine criteria and their data sources.
+\noindent All criterion values are pre-normalised to $[0, 1]$ using min-max normalisation prior to ingestion, ensuring deterministic and reproducible scoring without runtime normalisation cost. Table~\ref{tab:criteria} lists the nine criteria and their data sources. In addition to criterion values, each cell carries three administrative geography attributes---LSOA code (\texttt{lsoa21cd}), LSOA name (\texttt{lsoa21nm}), and London borough name (\texttt{borough\_name})---enabling direct linkage to external datasets such as DFES projections (Section~\ref{sec:dfes}) without runtime spatial joins.
 
 \begin{table}[htbp]
 \centering

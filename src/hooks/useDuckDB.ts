@@ -72,6 +72,9 @@ interface MCDAQueryResult {
   mcda_score: number
   criterion_values?: Record<string, number>
   raw_values?: Record<string, number>
+  lsoa21cd?: string
+  lsoa21nm?: string
+  borough_name?: string
 }
 
 /**
@@ -107,6 +110,8 @@ export function useMCDAQuery() {
         .join(',\n  ')
       const extraSelect = [criterionSelect, rawSelect].filter(Boolean).join(',\n  ')
 
+      const metadataSelect = 'base.lsoa21cd, base.lsoa21nm, base.borough_name'
+
       const sql = extraSelect
         ? `
 WITH scored AS (
@@ -115,7 +120,8 @@ WITH scored AS (
 SELECT
   scored.h3_cell,
   scored.mcda_score,
-  ${extraSelect}
+  ${extraSelect},
+  ${metadataSelect}
 FROM scored
 JOIN mcda_base base USING (h3_cell)
 ORDER BY scored.mcda_score DESC`
@@ -144,6 +150,9 @@ ORDER BY scored.mcda_score DESC`
           mcda_score: Number(row.mcda_score),
           criterion_values: criterionValues,
           raw_values: rawValues,
+          lsoa21cd: row.lsoa21cd != null ? String(row.lsoa21cd) : undefined,
+          lsoa21nm: row.lsoa21nm != null ? String(row.lsoa21nm) : undefined,
+          borough_name: row.borough_name != null ? String(row.borough_name) : undefined,
         }
       })
 
@@ -156,6 +165,9 @@ ORDER BY scored.mcda_score DESC`
           count: number
           criterionSums: Record<string, number>
           rawSums: Record<string, number>
+          lsoa21cd?: string
+          lsoa21nm?: string
+          borough_name?: string
         }>()
         for (const row of rawData) {
           try {
@@ -187,26 +199,34 @@ ORDER BY scored.mcda_score DESC`
                   rawSums[criterionId] = value
                 }
               }
-              groups.set(parentCell, { sum: row.mcda_score, count: 1, criterionSums, rawSums })
+              groups.set(parentCell, {
+                sum: row.mcda_score, count: 1, criterionSums, rawSums,
+                lsoa21cd: row.lsoa21cd,
+                lsoa21nm: row.lsoa21nm,
+                borough_name: row.borough_name,
+              })
             }
           } catch {
             // skip invalid cells
           }
         }
-        data = Array.from(groups.entries()).map(([cell, { sum, count, criterionSums, rawSums }]) => {
+        data = Array.from(groups.entries()).map(([cell, g]) => {
           const criterionValues: Record<string, number> = {}
           const rawValues: Record<string, number> = {}
-          for (const [criterionId, value] of Object.entries(criterionSums)) {
-            criterionValues[criterionId] = value / count
+          for (const [criterionId, value] of Object.entries(g.criterionSums)) {
+            criterionValues[criterionId] = value / g.count
           }
-          for (const [criterionId, value] of Object.entries(rawSums)) {
-            rawValues[criterionId] = value / count
+          for (const [criterionId, value] of Object.entries(g.rawSums)) {
+            rawValues[criterionId] = value / g.count
           }
           return {
             h3_cell: cell,
-            mcda_score: sum / count,
+            mcda_score: g.sum / g.count,
             criterion_values: criterionValues,
             raw_values: rawValues,
+            lsoa21cd: g.lsoa21cd,
+            lsoa21nm: g.lsoa21nm,
+            borough_name: g.borough_name,
           }
         })
       } else {

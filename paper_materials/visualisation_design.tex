@@ -1,0 +1,117 @@
+% visualisation_design.tex
+% Visual Analytics Design for the EVCP Siting Dashboard
+% For inclusion in the main paper (e.g. Section: Visual Analytics Design)
+
+\section{Visual Analytics Design}
+\label{sec:vis-design}
+
+The dashboard follows a coordinated multiple view (CMV) architecture in which spatial, analytical, and temporal perspectives on EVCP siting are tightly linked through shared state. The design is guided by the visual analytics mantra~\cite{keim2008visual}---\emph{analyse first, show the important, zoom, filter, analyse further, details on demand}---and draws on established principles for multi-criteria spatial decision support~\cite{andrienko2007geovisual,jankowski2001gis}.
+
+%--------------------------------------------------------------
+\subsection{Dashboard Layout}
+\label{sec:layout}
+
+The interface is organised into three coordinated panels (Figure~\ref{fig:dashboard-layout}):
+
+\begin{enumerate}[nosep]
+    \item \textbf{Weight Laboratory} (left, 500\,px): interactive controls for MCDA method selection, criterion weighting via parallel coordinates, pairwise AHP comparison, and a diagnostics view.
+    \item \textbf{Spatial View} (centre, flexible): a web map displaying H3 hexagonal choropleth and glyph overlays, with a DFES timeseries panel anchored below.
+    \item \textbf{Impact Panel} (right, 340\,px): scenario placement list, eight KPI cards, a radar chart comparing active and saved scenarios, and a per-LSOA breakdown of aggregated impacts.
+\end{enumerate}
+
+\noindent All panels share state through a reactive store architecture (Zustand), ensuring that weight changes, map interactions, and scenario edits propagate immediately across views without explicit event wiring.
+
+%--------------------------------------------------------------
+\subsection{Spatial View and Glyph Encoding}
+\label{sec:spatial-view}
+
+The primary spatial encoding is a hexagonal choropleth rendered as MapLibre GL vector polygons over a CartoDB Positron basemap. Each H3 cell is coloured by its MCDA suitability score using a perceptually uniform \texttt{viridis} colour scale, with opacity adjustable via a continuous slider.
+
+An optional glyph overlay projects per-cell criterion profiles as either \emph{bar glyphs} (up to 6 criteria) or \emph{rose glyphs} (up to 8 criteria), drawn on HTML5 Canvas and positioned at cell centroids via MapLibre Marker objects. The glyph layer supports:
+
+\begin{itemize}[nosep]
+    \item \textbf{Size}: petal length (rose) or bar height encodes the oriented normalised criterion value.
+    \item \textbf{Width}: petal angular sweep (rose only) encodes the criterion weight, making higher-weighted criteria visually dominant.
+    \item \textbf{Texture}: a diagonal hatch pattern distinguishes \emph{cost} criteria from \emph{benefit} criteria within the same glyph, following the Bertin~\cite{bertin1983semiology} convention that texture signals qualitative difference.
+    \item \textbf{Comparison mode}: clicking a glyph pins it as a reference; subsequent hover glyphs show a dashed outline of the pinned profile for direct pairwise comparison.
+\end{itemize}
+
+\noindent The glyph aggregation resolution is user-controlled (H3~r6--r10), enabling analysts to switch between local detail and regional overview without recomputing MCDA scores.
+
+%--------------------------------------------------------------
+\subsection{Simulation Mode and Placement Interaction}
+\label{sec:simulation-mode}
+
+Activating \emph{Simulation Mode} changes the map cursor to an EVCP placement marker and enables a click-to-place interaction on any H3 cell. On click, the system:
+
+\begin{enumerate}[nosep]
+    \item Retrieves the MCDA query result row for the clicked cell, extracting both raw and normalised criterion values as well as LSOA and borough metadata sourced from the underlying DuckDB tables (Section~\ref{sec:data-pipeline}).
+    \item Opens a placement configuration popover displaying the reverse-geocoded address, charger type selector, charger count slider, and estimated installation cost.
+    \item On confirmation, stores the placement with its full spatial context---criterion values, LSOA code, LSOA name, and borough name---ensuring that impact calculations remain reproducible even if the user later changes MCDA weights.
+\end{enumerate}
+
+\noindent This \emph{capture-at-placement-time} design is a deliberate architectural choice: by snapshotting the spatial data when the placement is created, the impact model is decoupled from the current MCDA state, preventing silent invalidation of impact estimates when criterion weights change.
+
+%--------------------------------------------------------------
+\subsection{Impact Panel: KPIs and Radar Comparison}
+\label{sec:impact-panel}
+
+The right panel renders eight KPI cards (Section~\ref{sec:kpi-summary}) with large-format numbers and contextual micro-labels. When multiple scenarios are saved, a radar chart normalises six axes (energy, carbon, revenue, population, utilisation, headroom spare) to $[0, 1]$ using the maximum value across all series, enabling direct visual comparison of scenario profiles.
+
+\subsubsection{Per-LSOA Breakdown}
+\label{sec:lsoa-breakdown}
+
+For multi-placement scenarios, a collapsible \emph{Per-LSOA Breakdown} section groups placements by their LSOA code (carried as metadata on each placement) and reports per-group summaries:
+
+\begin{itemize}[nosep]
+    \item Number of placement sites and total charger count
+    \item Aggregated energy delivered, carbon saved, and peak demand
+    \item Borough name for spatial context
+\end{itemize}
+
+\noindent This breakdown uses client-side JavaScript grouping over the placement metadata. For workloads requiring cell-level aggregation from the full spatial dataset (e.g.\ neighbourhood-level capacity planning), a DuckDB SQL aggregation path is also available:
+
+\begin{verbatim}
+SELECT lsoa21cd, lsoa21nm, borough_name,
+       COUNT(*) AS cell_count
+FROM mcda_base
+WHERE h3_cell IN (...)
+GROUP BY lsoa21cd, lsoa21nm, borough_name
+\end{verbatim}
+
+%--------------------------------------------------------------
+\subsection{In-Browser Analytical Data Pipeline}
+\label{sec:data-pipeline}
+
+All spatial data processing runs client-side in a DuckDB-WASM instance~\cite{duckdb2019}, eliminating server infrastructure requirements. Ten Parquet files (one per criterion layer) are fetched on load, registered as DuckDB tables, and joined on the H3 cell identifier into a unified \texttt{mcda\_base} view:
+
+\begin{equation}
+\texttt{mcda\_base} = \underset{i=1}{\overset{10}{\bowtie}} \; T_i \quad \text{on } \texttt{h3\_cell}
+\end{equation}
+
+\noindent Each Parquet file also carries administrative geography fields (\texttt{lsoa21cd}, \texttt{lsoa21nm}, \texttt{borough\_name}) that are exposed once from the base table to avoid duplicate columns. The MCDA scoring query is dynamically generated from the current weight vector and method, joined back to the base view to retrieve both scored and raw criterion values in a single pass.
+
+The query result type carries three metadata fields alongside numerical scores:
+
+\begin{verbatim}
+{ h3_cell, mcda_score,
+  criterion_values, raw_values,
+  lsoa21cd, lsoa21nm, borough_name }
+\end{verbatim}
+
+\noindent This metadata replaces a prior approach that queried invisible PMTiles vector layers for LSOA identification. The DuckDB-sourced approach is deterministic (unaffected by map zoom or tile availability) and provides borough context without additional spatial join operations.
+
+%--------------------------------------------------------------
+\subsection{Coordinated Linking Model}
+\label{sec:linking}
+
+Interactions propagate across views through a shared reactive store:
+
+\begin{itemize}[nosep]
+    \item \textbf{Map $\rightarrow$ DFES}: clicking an H3 cell sets the selected LSOA and borough in the global store; the DFES timeseries panel re-fetches data scoped to the selected geography.
+    \item \textbf{Map $\rightarrow$ Impact}: placing a charger triggers impact recalculation; the KPI cards and radar chart update within the same render cycle.
+    \item \textbf{Weight Lab $\rightarrow$ Map}: adjusting a criterion weight re-runs the DuckDB MCDA query; the choropleth and glyph overlays update after a 200\,ms debounce.
+    \item \textbf{DFES $\rightarrow$ Map}: searching or selecting an LSOA in the DFES panel updates the map's selected geography, and the scope toggle (Section~\ref{sec:scope-toggle}) adjusts the DFES query accordingly.
+\end{itemize}
+
+\noindent This architecture supports \emph{loose coupling}: each panel subscribes only to the state slices it needs, minimising unnecessary re-renders during high-frequency interactions such as weight dragging.
