@@ -46,11 +46,23 @@ export interface ChargerSpec {
   installMonths: number
 }
 
+export interface PlacementCellData {
+  /** Raw field values keyed by criterion ID (original units from parquet) */
+  raw: Record<string, number>
+  /** Min-max normalized values (0–1) keyed by criterion ID */
+  normalized: Record<string, number>
+  /** Non-numeric attributes from DuckDB (LSOA / borough context) */
+  metadata?: { lsoa21cd?: string; lsoa21nm?: string; borough_name?: string }
+}
+
 export interface EVCPPlacement {
   h3Cell: string
   chargerType: ChargerType
   chargerCount: number
   timestamp: number
+  lsoaCode?: string
+  /** Spatial data captured at placement time from MCDA results */
+  cellData?: PlacementCellData
 }
 
 export interface ImpactEstimate {

@@ -12,7 +12,7 @@ const DATA_LAYERS: DataLayer[] = [
     filename: 'population_density_h3_r10.parquet',
     tableName: 'population_density',
     joinField: 'h3_cell',
-    fields: ['pop_density', 'pop_density_normalized'],
+    fields: ['pop_density', 'pop_density_normalized', 'lsoa21cd', 'lsoa21nm', 'borough_name'],
   },
   {
     filename: 'car_ownership_corrected_h3_r10.parquet',
@@ -149,11 +149,30 @@ export async function getRowCount(): Promise<number> {
 /**
  * Returns cell data for a specific H3 cell.
  */
-export async function getCellData(h3Cell: string): Promise<Record<string, number> | null> {
-  const result = await query<Record<string, number>>(
+export async function getCellData(h3Cell: string): Promise<Record<string, number | string> | null> {
+  const result = await query<Record<string, number | string>>(
     `SELECT * FROM mcda_base WHERE h3_cell = '${h3Cell}' LIMIT 1`
   )
   return result[0] ?? null
+}
+
+export interface LSOABreakdown {
+  lsoa21cd: string
+  lsoa21nm: string
+  borough_name: string
+  cell_count: number
+}
+
+export async function getPlacementLSOABreakdown(h3Cells: string[]): Promise<LSOABreakdown[]> {
+  if (h3Cells.length === 0) return []
+  const cellList = h3Cells.map((c) => `'${c}'`).join(',')
+  return query<LSOABreakdown>(`
+    SELECT lsoa21cd, lsoa21nm, borough_name, COUNT(*) as cell_count
+    FROM mcda_base
+    WHERE h3_cell IN (${cellList})
+    GROUP BY lsoa21cd, lsoa21nm, borough_name
+    ORDER BY cell_count DESC
+  `)
 }
 
 export { DATA_LAYERS }

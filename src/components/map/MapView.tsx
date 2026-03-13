@@ -16,7 +16,7 @@ import { h3ScoresToGeoJSON, getH3Center } from '@/utils/h3-utils'
 import { scoreToColor } from '@/utils/color-scales'
 import { ChargerConfig } from '../impact/ChargerConfig'
 import { SlidersHorizontal, Zap } from 'lucide-react'
-import type { EVCPPlacement } from '@/analysis/types'
+import type { EVCPPlacement, PlacementCellData } from '@/analysis/types'
 
 interface MapViewProps {
   mcdaResults: Array<{
@@ -24,6 +24,9 @@ interface MapViewProps {
     mcda_score: number
     criterion_values?: Record<string, number>
     raw_values?: Record<string, number>
+    lsoa21cd?: string
+    lsoa21nm?: string
+    borough_name?: string
   }>
 }
 
@@ -46,42 +49,42 @@ const BASEMAP_STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.
 const EVCP_CURSOR_SVG = `<svg xmlns='http://www.w3.org/2000/svg' width='34' height='34' viewBox='0 0 34 34'><path fill='%23dc2626' d='M17 33s10-11.2 10-18A10 10 0 1 0 7 15c0 6.8 10 18 10 18Z'/><circle cx='17' cy='14.5' r='6.3' fill='%23fff'/><path fill='%230f172a' d='M18 10h-2.2l-.8 4h2.1l-.8 4 3.7-5h-2.1z'/></svg>`
 const EVCP_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(EVCP_CURSOR_SVG)}") 17 31, crosshair`
 const CHARGEPOINT_ICON_ID = 'chargepoint-marker'
-const CHARGEPOINT_ICON_URL = '/icons/chargepoint-marker.svg'
+// const CHARGEPOINT_ICON_URL = '/icons/chargepoint-marker.svg'
 
 type OverlayConfig =
   | {
-      id: string
-      label: string
-      url: string
-      sourceLayer: string
-      type: 'line'
-      paint: NonNullable<LineLayerSpecification['paint']>
-    }
+    id: string
+    label: string
+    url: string
+    sourceLayer: string
+    type: 'line'
+    paint: NonNullable<LineLayerSpecification['paint']>
+  }
   | {
-      id: string
-      label: string
-      url: string
-      sourceLayer: string
-      type: 'circle'
-      paint: NonNullable<CircleLayerSpecification['paint']>
-    }
+    id: string
+    label: string
+    url: string
+    sourceLayer: string
+    type: 'circle'
+    paint: NonNullable<CircleLayerSpecification['paint']>
+  }
   | {
-      id: string
-      label: string
-      url: string
-      sourceLayer: string
-      type: 'fill'
-      paint: NonNullable<FillLayerSpecification['paint']>
-    }
+    id: string
+    label: string
+    url: string
+    sourceLayer: string
+    type: 'fill'
+    paint: NonNullable<FillLayerSpecification['paint']>
+  }
   | {
-      id: string
-      label: string
-      url: string
-      sourceLayer: string
-      type: 'symbol'
-      layout: NonNullable<SymbolLayerSpecification['layout']>
-      paint?: SymbolLayerSpecification['paint']
-    }
+    id: string
+    label: string
+    url: string
+    sourceLayer: string
+    type: 'symbol'
+    layout: NonNullable<SymbolLayerSpecification['layout']>
+    paint?: SymbolLayerSpecification['paint']
+  }
 
 const PMTILES_OVERLAYS: OverlayConfig[] = [
   {
@@ -129,6 +132,17 @@ const PMTILES_OVERLAYS: OverlayConfig[] = [
       ],
       'icon-allow-overlap': true,
       'icon-ignore-placement': true,
+    },
+  },
+  {
+    id: 'lsoa-fills',
+    label: 'LSOA Area Selections',
+    url: '/data_source/pmtiles/lsoa_boundaries.pmtiles',
+    sourceLayer: 'lsoa_boundaries',
+    type: 'fill',
+    paint: {
+      'fill-color': 'rgba(0,0,0,0)',
+      'fill-opacity': 0
     },
   },
 ]
@@ -188,6 +202,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const glyphTooltipActiveRef = useRef(false)
   const glyphMarkersRef = useRef<maplibregl.Marker[]>([])
   const latestPlacementsRef = useRef<EVCPPlacement[]>([])
+  const mcdaResultsRef = useRef(mcdaResults)
   const isSimulationModeRef = useRef(false)
   const pmtilesProtocolRef = useRef<Protocol | null>(null)
   const [showChargerConfig, setShowChargerConfig] = useState(false)
@@ -201,6 +216,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const [glyphSizeScale, setGlyphSizeScale] = useState(1)
   const [comparisonGlyph, setComparisonGlyph] = useState<GlyphDatum | null>(null)
   const [selectedClickLocation, setSelectedClickLocation] = useState<ClickLocation | null>(null)
+  const [placementCellData, setPlacementCellData] = useState<PlacementCellData | null>(null)
   const [overlayVisibility, setOverlayVisibility] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(PMTILES_OVERLAYS.map((overlay) => [overlay.id, false]))
   )
@@ -212,6 +228,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const setZoom = useMapStore((s) => s.setZoom)
   const criteria = useMCDAStore((s) => s.criteria)
 
+  const setSelectedLSOA = useMapStore((s) => s.setSelectedLSOA)
   const currentPlacements = useScenarioStore((s) => s.currentPlacements)
   const isSimulationMode = useScenarioStore((s) => s.isSimulationMode)
   const setSimulationMode = useScenarioStore((s) => s.setSimulationMode)
@@ -276,15 +293,15 @@ export function MapView({ mcdaResults }: MapViewProps) {
 
       const connectorSummary = Array.isArray(connections)
         ? connections
-            .map((connection) => {
-              const power = Number(connection.PowerKW)
-              const quantity = Number(connection.Quantity)
-              const powerLabel = Number.isFinite(power) ? `${power.toFixed(1)} kW` : null
-              const qtyLabel = Number.isFinite(quantity) ? `x${quantity}` : null
-              return [powerLabel, qtyLabel].filter(Boolean).join(' ')
-            })
-            .filter((entry) => entry.length > 0)
-            .join(', ')
+          .map((connection) => {
+            const power = Number(connection.PowerKW)
+            const quantity = Number(connection.Quantity)
+            const powerLabel = Number.isFinite(power) ? `${power.toFixed(1)} kW` : null
+            const qtyLabel = Number.isFinite(quantity) ? `x${quantity}` : null
+            return [powerLabel, qtyLabel].filter(Boolean).join(' ')
+          })
+          .filter((entry) => entry.length > 0)
+          .join(', ')
         : ''
 
       const statusId = Number(props.StatusTypeID)
@@ -558,7 +575,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
         ctx.strokeStyle = '#ffffff'
         ctx.lineWidth = 1.5
         ctx.stroke()
-        
+
         // Draw a placeholder lightning bolt or simple shape
         ctx.fillStyle = '#ffffff'
         ctx.font = '14px sans-serif' // Smaller font for less intimidation
@@ -590,14 +607,35 @@ export function MapView({ mcdaResults }: MapViewProps) {
     })
 
     map.on('click', 'h3-fill', (e) => {
-      if (!isSimulationModeRef.current) return
-      if (e.features && e.features.length > 0) {
-        const cell = e.features[0].properties?.h3_cell as string
-        selectH3Cell(cell)
-        setSelectedClickLocation({ lat: e.lngLat.lat, lng: e.lngLat.lng })
-        setSelectedPlacementCell(cell)
-        setShowChargerConfig(true)
+      if (!e.features || e.features.length === 0) return
+      const cell = e.features[0].properties?.h3_cell as string
+
+      const mcdaRow = mcdaResultsRef.current.find((r) => r.h3_cell === cell)
+
+      if (mcdaRow?.lsoa21cd) {
+        setSelectedLSOA(mcdaRow.lsoa21cd, mcdaRow.lsoa21nm ?? null, mcdaRow.borough_name ?? null)
       }
+
+      if (!isSimulationModeRef.current) return
+
+      if (mcdaRow) {
+        setPlacementCellData({
+          raw: mcdaRow.raw_values ?? {},
+          normalized: mcdaRow.criterion_values ?? {},
+          metadata: {
+            lsoa21cd: mcdaRow.lsoa21cd,
+            lsoa21nm: mcdaRow.lsoa21nm,
+            borough_name: mcdaRow.borough_name,
+          },
+        })
+      } else {
+        setPlacementCellData(null)
+      }
+
+      selectH3Cell(cell)
+      setSelectedClickLocation({ lat: e.lngLat.lat, lng: e.lngLat.lng })
+      setSelectedPlacementCell(cell)
+      setShowChargerConfig(true)
     })
 
     map.on('mouseenter', 'h3-fill', () => {
@@ -654,6 +692,10 @@ export function MapView({ mcdaResults }: MapViewProps) {
   useEffect(() => {
     latestPlacementsRef.current = currentPlacements
   }, [currentPlacements])
+
+  useEffect(() => {
+    mcdaResultsRef.current = mcdaResults
+  }, [mcdaResults])
 
   useEffect(() => {
     const map = mapRef.current
@@ -733,10 +775,10 @@ export function MapView({ mcdaResults }: MapViewProps) {
             rawValues,
             comparisonGlyph
               ? {
-                  h3Cell: comparisonGlyph.h3Cell,
-                  score: comparisonGlyph.score,
-                  rawValues: comparisonGlyph.rawValues,
-                }
+                h3Cell: comparisonGlyph.h3Cell,
+                score: comparisonGlyph.score,
+                rawValues: comparisonGlyph.rawValues,
+              }
               : undefined
           )
         )
@@ -1199,10 +1241,10 @@ export function MapView({ mcdaResults }: MapViewProps) {
               row.rawValues,
               comparisonGlyph
                 ? {
-                    h3Cell: comparisonGlyph.h3Cell,
-                    score: comparisonGlyph.score,
-                    rawValues: comparisonGlyph.rawValues,
-                  }
+                  h3Cell: comparisonGlyph.h3Cell,
+                  score: comparisonGlyph.score,
+                  rawValues: comparisonGlyph.rawValues,
+                }
                 : undefined
             )
           )
@@ -1289,11 +1331,10 @@ export function MapView({ mcdaResults }: MapViewProps) {
                 selectH3Cell(null)
               }
             }}
-            className={`inline-flex items-center gap-2 px-3 py-2 text-xs font-bold transition-colors ${
-              isSimulationMode
-                ? 'bg-amber-500 text-white'
-                : 'bg-white/95 text-slate-700 hover:bg-slate-50'
-            }`}
+            className={`inline-flex items-center gap-2 px-3 py-2 text-xs font-bold transition-colors ${isSimulationMode
+              ? 'bg-amber-500 text-white'
+              : 'bg-white/95 text-slate-700 hover:bg-slate-50'
+              }`}
             title="Toggle EVCP placement mode"
           >
             <Zap className="h-3.5 w-3.5" strokeWidth={2.5} />
@@ -1368,7 +1409,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
             <div className="mt-2">
               <div className="text-[10px] text-slate-500 mb-1">Overlays</div>
               <div className="flex flex-col gap-2">
-                {PMTILES_OVERLAYS.map((overlay) => (
+                {PMTILES_OVERLAYS.filter((o) => o.id !== 'lsoa-fills').map((overlay) => (
                   <label key={overlay.id} className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
                     <input
                       type="checkbox"
@@ -1491,7 +1532,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
       )}
 
       {/* Color Legend */}
-      <div className="absolute bottom-8 right-4 bg-white/90 backdrop-blur-sm rounded-lg shadow-lg p-3 border border-slate-200">
+      <div className="absolute bottom-10 right-4 bg-white/90 backdrop-blur-sm rounded-lg shadow-lg p-3 border border-slate-200">
         <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
           Suitability Score
         </div>
@@ -1519,9 +1560,11 @@ export function MapView({ mcdaResults }: MapViewProps) {
               const [lat, lng] = getH3Center(selectedH3Cell)
               return { lat, lng }
             })()}
+            cellData={placementCellData ?? undefined}
             onClose={() => {
               setShowChargerConfig(false)
               setSelectedClickLocation(null)
+              setPlacementCellData(null)
               setSelectedPlacementCell(null)
               selectH3Cell(null)
             }}

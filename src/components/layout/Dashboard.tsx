@@ -21,6 +21,9 @@ interface DashboardProps {
     mcda_score: number
     criterion_values?: Record<string, number>
     raw_values?: Record<string, number>
+    lsoa21cd?: string
+    lsoa21nm?: string
+    borough_name?: string
   }>
 }
 
@@ -29,6 +32,7 @@ export function Dashboard({ totalRows, mcdaResults }: DashboardProps) {
   const computeTime = useMCDAStore((s) => s.lastComputeTime)
   const selectedLSOA = useMapStore((s) => s.selectedLSOA)
   const selectedLSOAName = useMapStore((s) => s.selectedLSOAName)
+  const selectedBoroughName = useMapStore((s) => s.selectedBoroughName)
 
   const tabs: {
     id: TabId
@@ -87,7 +91,7 @@ export function Dashboard({ totalRows, mcdaResults }: DashboardProps) {
         {/* Center: Map */}
         <div className="flex-1 flex flex-col">
           <MapView mcdaResults={mcdaResults} />
-          <DFESTimeseries selectedLSOA={selectedLSOA} selectedLSOAName={selectedLSOAName} />
+          <DFESTimeseries selectedLSOA={selectedLSOA} selectedLSOAName={selectedLSOAName} selectedBoroughName={selectedBoroughName} />
         </div>
 
         {/* Right Panel: Impact & Scenarios */}

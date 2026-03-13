@@ -1,0 +1,164 @@
+% dfes_contextualisation.tex
+% Scenario Contextualisation via Distribution Future Energy Scenarios
+% For inclusion in the main paper (e.g. Section: Scenario Contextualisation / Discussion)
+
+\section{Scenario Contextualisation via DFES Projections}
+\label{sec:dfes}
+
+A key analytical contribution of the platform is the integration of scenario-level impact estimates (Section~\ref{sec:impact}) with UK Power Networks' Distribution Future Energy Scenarios (DFES)~\cite{ukpn-dfes}, transforming the DFES timeseries from a passive reference panel into a coordinated supply-versus-demand visualisation. This section describes the data model, the metric conversion framework, the visual encoding of the supply--demand relationship, and the geographic scoping mechanism.
+
+%--------------------------------------------------------------
+\subsection{DFES Data Source}
+\label{sec:dfes-data}
+
+DFES projections are retrieved at runtime from the UKPN Open Data portal via a paginated REST API\footnote{\url{https://ukpowernetworks.opendatasoft.com/explore/dataset/ukpn-dfes-by-local-authorities}}. Each record associates a year, a scenario pathway (e.g.\ \emph{Leading the Way}, \emph{Consumer Transformation}, \emph{System Transformation}, \emph{Falling Short}), a geographic identifier, and projected adoption counts for four technology metrics:
+
+\begin{table}[htbp]
+\centering
+\caption{DFES metrics and their UKPN API field names.}
+\label{tab:dfes-metrics}
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Metric ID} & \textbf{Description} & \textbf{API Field} \\
+\midrule
+\texttt{electric\_cars} & Electric cars \& hybrids & \texttt{number\_of\_electric\_cars\_\ldots} \\
+\texttt{electric\_vans} & Electric vans \& hybrids & \texttt{number\_of\_electric\_vans\_\ldots} \\
+\texttt{heat\_pumps} & Domestic heat pumps & \texttt{number\_of\_domestic\_heat\_pumps} \\
+\texttt{batteries} & Domestic batteries & \texttt{number\_of\_domestic\_batteries\_kw} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Each pathway produces a timeseries of annual projections (typically 2025--2050), rendered as coloured line charts with D3.js~\cite{bostock2011d3} using monotone-x interpolation.
+
+%--------------------------------------------------------------
+\subsection{Geographic Scope Hierarchy}
+\label{sec:scope-toggle}
+
+The DFES panel supports three levels of geographic scoping, selectable via a toggle control:
+
+\begin{enumerate}[nosep]
+    \item \textbf{Network}: aggregated projections across the entire UKPN service area, retrieved via a \texttt{GROUP BY year, pathway} query with \texttt{SUM} aggregation.
+    \item \textbf{Borough}: projections for a single local authority district, filtered by \texttt{lad22nm} (the local authority name field in the DFES dataset). The borough name is sourced from the \texttt{borough\_name} attribute of the selected H3 cell.
+    \item \textbf{LSOA}: projections for a single Lower-layer Super Output Area, filtered by \texttt{lsoa21cd}. This is the finest geographic granularity available in DFES data and can produce sparse series for smaller LSOAs.
+\end{enumerate}
+
+\noindent When the user clicks an H3 cell on the map, the LSOA code and borough name are read from the DuckDB query result (Section~\ref{sec:data-pipeline}) and propagated to the DFES panel, which auto-selects the appropriate scope level. The scope toggle allows the user to manually widen or narrow the geographic context---a useful capability when LSOA-level data is sparse and borough-level aggregation provides a more stable reference.
+
+%--------------------------------------------------------------
+\subsection{Impact-to-Metric Conversion}
+\label{sec:metric-conversion}
+
+To overlay scenario impact estimates on DFES projections, the platform converts the scenario's aggregated impact KPIs into units commensurate with each DFES metric. The conversion functions are:
+
+\begin{equation}
+\label{eq:ev-conversion}
+V_{\text{EV}} = \frac{E_{\text{annual}}}{\bar{E}_{\text{EV}}}
+\end{equation}
+
+\noindent where $\bar{E}_{\text{EV}} = 2{,}500~\text{kWh/year}$ is the assumed average annual energy consumption per electric vehicle (encompassing both full battery-electric and plug-in hybrid usage patterns). This converts the scenario's total annual energy delivery into the number of EVs that could be sustainably supported.
+
+\begin{equation}
+\label{eq:hp-conversion}
+V_{\text{HP}} = \frac{E_{\text{annual}}}{\bar{E}_{\text{HP}}}
+\end{equation}
+
+\noindent where $\bar{E}_{\text{HP}} = 4{,}000~\text{kWh/year}$ is the typical annual electricity consumption of a domestic air-source heat pump operating with a seasonal coefficient of performance (SCOP) of approximately~3.
+
+\begin{equation}
+\label{eq:bat-conversion}
+V_{\text{BAT}} = \frac{P_{\text{peak}}}{\bar{P}_{\text{BAT}}}
+\end{equation}
+
+\noindent where $\bar{P}_{\text{BAT}} = 4~\text{kW}$ is the typical rated power of a domestic battery storage system. This converts the scenario's peak demand into the number of equivalent domestic battery installations.
+
+Table~\ref{tab:metric-conversion} summarises the conversion factors.
+
+\begin{table}[htbp]
+\centering
+\caption{Conversion factors from scenario impact to DFES metric units.}
+\label{tab:metric-conversion}
+\small
+\begin{tabular}{llll}
+\toprule
+\textbf{DFES Metric} & \textbf{Impact Source} & \textbf{Denominator} & \textbf{Output Unit} \\
+\midrule
+Electric cars & $E_{\text{annual}}$ & 2{,}500 kWh/yr & Vehicles \\
+Electric vans & $E_{\text{annual}}$ & 2{,}500 kWh/yr & Vehicles \\
+Heat pumps & $E_{\text{annual}}$ & 4{,}000 kWh/yr & Installations \\
+Batteries & $P_{\text{peak}}$ & 4 kW & Installations \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%--------------------------------------------------------------
+\subsection{Supply-versus-Demand Visual Encoding}
+\label{sec:supply-demand}
+
+The converted scenario supply value $V$ is rendered as a dashed horizontal line across the DFES timeseries chart, with a labelled badge showing the numeric value and its contextual meaning (e.g.\ ``EVs supportable: 142'' or ``Heat pumps eq.: 85'').
+
+Rather than displaying only the supply line, the platform renders \emph{shaded fill areas} between the supply line and each DFES demand pathway curve (Figure~\ref{fig:supply-demand}). Two SVG clip paths partition the chart area at the supply line's $y$-coordinate:
+
+\begin{itemize}[nosep]
+    \item \textbf{Green fill} (below the supply line): the region where projected demand is less than the scenario's supply capacity, indicating that the proposed infrastructure can meet the projected uptake.
+    \item \textbf{Red fill} (above the supply line): the region where projected demand exceeds the supply capacity, visually encoding unmet demand.
+\end{itemize}
+
+\noindent Each DFES pathway series generates both a green and a red area, clipped to the corresponding region. This produces a layered shading effect that intuitively communicates where and when each pathway transitions from surplus to deficit relative to the scenario's capacity.
+
+The clip-path approach ensures that the visual encoding is resolution-independent and correctly handles pathways that cross the supply line multiple times (e.g.\ a pathway that initially grows slowly, crosses the supply line, and then accelerates).
+
+%--------------------------------------------------------------
+\subsection{Year of Constriction Analysis}
+\label{sec:year-of-constriction}
+
+For each DFES pathway, the platform identifies the \emph{year of constriction}---the first year in which the projected demand curve crosses the scenario supply line from below. This is computed via linear interpolation between adjacent data points:
+
+\begin{equation}
+\label{eq:constriction}
+t^{*} = t_i + \frac{V - y_i}{y_{i+1} - y_i} \cdot (t_{i+1} - t_i)
+\end{equation}
+
+\noindent where $(t_i, y_i)$ and $(t_{i+1}, y_{i+1})$ are consecutive DFES data points satisfying $y_i \leq V < y_{i+1}$, and $V$ is the scenario supply value.
+
+The year of constriction is encoded as:
+
+\begin{enumerate}[nosep]
+    \item A filled circle at the intersection point, coloured to match the pathway, with a native tooltip showing the pathway name and interpolated year.
+    \item A vertical dashed drop-line from the intersection point to the $x$-axis.
+    \item A labelled year badge on the $x$-axis, with basic collision avoidance (stacking when labels would overlap).
+\end{enumerate}
+
+\noindent Pathways that never cross the supply line within the projection horizon (i.e.\ demand never exceeds supply) produce no marker, indicating that the scenario provides sufficient capacity for that pathway's projection.
+
+This analysis provides a direct temporal answer to the planning question: ``Under which DFES pathway, and in which year, will this deployment become insufficient?''
+
+%--------------------------------------------------------------
+\subsection{Scope-Aware Impact Computation}
+\label{sec:scope-impact}
+
+The impact values displayed on the DFES chart are scope-sensitive. The computation varies by geographic scope:
+
+\begin{itemize}[nosep]
+    \item \textbf{Network scope}: uses the total aggregated impact across all placements (i.e.\ the global scenario impact from the Impact Panel).
+    \item \textbf{Borough scope}: filters the current placement set to those whose \texttt{borough\_name} metadata matches the selected borough, re-aggregates their individual impact estimates, and uses the borough-level total.
+    \item \textbf{LSOA scope}: filters placements to those whose \texttt{lsoa21cd} matches the selected LSOA, re-aggregates, and uses the LSOA-level total.
+\end{itemize}
+
+\noindent This ensures that the supply line on the DFES chart corresponds to the same geographic scope as the demand curves, avoiding the misleading comparison of network-level supply against LSOA-level demand (or vice versa). When no placements exist within the selected scope, the impact overlay is suppressed and no supply line is drawn.
+
+%--------------------------------------------------------------
+\subsection{Design Rationale}
+\label{sec:dfes-rationale}
+
+The integration of scenario simulation with DFES projections addresses a gap identified during the design process: without temporal context, the impact KPIs (Section~\ref{sec:kpi-summary}) are \emph{static snapshots} that do not communicate how long a deployment will remain adequate as demand grows. By overlaying scenario supply on projected demand trajectories, the DFES panel transforms a forward-looking reference dataset into a \emph{temporal stress test} for the proposed infrastructure.
+
+The visual encoding choices reflect the following design goals:
+
+\begin{description}[nosep]
+    \item[Immediate legibility:] The green/red shading follows the metaphor of traffic-light colouring (green = safe, red = concern) and requires no legend to interpret.
+    \item[Pathway comparison:] Multiple pathways can be displayed simultaneously, with each pathway producing its own shaded region and constriction marker, enabling direct comparison of optimistic versus pessimistic scenarios.
+    \item[Geographic flexibility:] The scope toggle allows analysts to reason about the same scenario at different geographic scales---network planners may prefer the borough view for substation-level capacity assessment, while local councils may focus on LSOA-level equity analysis.
+    \item[Metric generality:] By defining per-metric conversion factors, the supply--demand overlay applies uniformly to all four DFES metrics (EVs, heat pumps, batteries), not only to the electric vehicle metrics for which the impact model was originally designed.
+\end{description}

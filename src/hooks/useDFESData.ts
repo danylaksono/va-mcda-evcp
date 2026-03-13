@@ -5,7 +5,7 @@ const API_KEY = import.meta.env.VITE_DFES_API_KEY || '7fe348e85bd7f26ab10a115c33
 const BASE_URL = 'https://ukpowernetworks.opendatasoft.com/api/explore/v2.1/catalog/datasets/ukpn-dfes-by-local-authorities/records'
 
 export interface DFESScope {
-  level: 'network' | 'lsoa'
+  level: 'network' | 'lsoa' | 'borough'
   code?: string | null
 }
 
@@ -47,7 +47,7 @@ export function useDFESData(scope: DFESScope) {
 
           // First try where; if first page 400s, retry using refine
           let useWhere = true
-          for (;;) {
+          for (; ;) {
             const params = buildParams(useWhere)
             const response = await fetch(`${BASE_URL}?${params}`)
 
@@ -93,14 +93,19 @@ export function useDFESData(scope: DFESScope) {
           setAvailablePathways(pathways)
           setSeries(series)
 
+          // Only auto-select first pathway if CURRENTLY null AND we haven't explicitly set null
+          // Actually, it's better to allow null (All Pathways) to persist.
+          // Let's only set it if there's no selection and we want to default to something.
           const store = useDFESStore.getState()
-          if ((!store.selectedPathway || !pathways.includes(store.selectedPathway)) && pathways.length > 0) {
-            setSelectedPathway(pathways[0])
+          if (!store.selectedPathway && pathways.length > 0 && scope.level !== 'lsoa') {
+            // Default logic removed to allow 'All Pathways' to persist
           }
-        } else {
+        } else if (scope.level === 'borough' && scope.code) {
           const field = metricKey[selectedMetric]
+          const boroughName = String(scope.code)
           const params = new URLSearchParams({
-            select: `year,pathway,sum(${field})`,
+            select: `year,pathway,sum(${field}) as total`,
+            where: `lad22nm='${boroughName}'`,
             group_by: 'year,pathway',
             order_by: 'year',
             limit: '500',
@@ -121,7 +126,44 @@ export function useDFESData(scope: DFESScope) {
             const points = grouped.get(pathway) || []
             points.push({
               year: parseInt(row.year),
-              value: Number(row[`sum(${field})`]) || 0,
+              value: Number(row.total) || 0,
+            })
+            grouped.set(pathway, points)
+          })
+
+          const boroughSeries = Array.from(grouped.entries()).map(([pathway, points]) => ({
+            pathway,
+            points: points.sort((a, b) => a.year - b.year),
+          }))
+
+          const pathways = boroughSeries.map((s) => s.pathway).sort()
+          setAvailablePathways(pathways)
+          setSeries(boroughSeries)
+        } else {
+          const field = metricKey[selectedMetric]
+          const params = new URLSearchParams({
+            select: `year,pathway,sum(${field}) as total`,
+            group_by: 'year,pathway',
+            order_by: 'year',
+            limit: '500',
+            apikey: API_KEY,
+          })
+
+          const response = await fetch(`${BASE_URL}?${params}`)
+          if (!response.ok) {
+            throw new Error(`API Error: ${response.status} ${response.statusText}`)
+          }
+
+          const json = await response.json()
+          const results = json.results || []
+
+          const grouped = new Map<string, DFESSeries['points']>()
+          results.forEach((row: any) => {
+            const pathway = row.pathway as string
+            const points = grouped.get(pathway) || []
+            points.push({
+              year: parseInt(row.year),
+              value: Number(row.total) || 0,
             })
             grouped.set(pathway, points)
           })
@@ -134,11 +176,6 @@ export function useDFESData(scope: DFESScope) {
           const pathways = series.map((s) => s.pathway).sort()
           setAvailablePathways(pathways)
           setSeries(series)
-
-          const store = useDFESStore.getState()
-          if (store.selectedPathway && !pathways.includes(store.selectedPathway)) {
-            setSelectedPathway(null)
-          }
         }
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Failed to fetch DFES data'

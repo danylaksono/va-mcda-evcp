@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react'
+import { useMapStore } from '@/store/map-store'
 import { useScenarioStore } from '@/store/scenario-store'
 import { CHARGER_SPECS } from '@/analysis/types'
-import type { ChargerType } from '@/analysis/types'
+import type { ChargerType, PlacementCellData } from '@/analysis/types'
 import { formatCurrency } from '@/utils/format'
 
 const addressCache = new Map<string, string>()
@@ -13,16 +14,19 @@ function getCacheKey(lat: number, lng: number) {
 interface ChargerConfigProps {
   h3Cell: string
   location: { lat: number; lng: number }
+  cellData?: PlacementCellData
   onClose: () => void
 }
 
-export function ChargerConfig({ h3Cell, location, onClose }: ChargerConfigProps) {
+export function ChargerConfig({ h3Cell, location, cellData, onClose }: ChargerConfigProps) {
   const [chargerType, setChargerType] = useState<ChargerType>('fast')
   const [chargerCount, setChargerCount] = useState(4)
   const [address, setAddress] = useState<string | null>(null)
   const [addressLoading, setAddressLoading] = useState(false)
   const [addressError, setAddressError] = useState<string | null>(null)
   const addPlacement = useScenarioStore((s) => s.addPlacement)
+  const mapSelectedLSOA = useMapStore((s) => s.selectedLSOA)
+  const lsoaCode = cellData?.metadata?.lsoa21cd ?? mapSelectedLSOA
 
   const spec = CHARGER_SPECS[chargerType]
   const totalCost = spec.costGBP * chargerCount
@@ -93,7 +97,7 @@ export function ChargerConfig({ h3Cell, location, onClose }: ChargerConfigProps)
   }, [location.lat, location.lng])
 
   function handlePlace() {
-    addPlacement(h3Cell, chargerType, chargerCount)
+    addPlacement(h3Cell, chargerType, chargerCount, lsoaCode || undefined, cellData)
     onClose()
   }
 
@@ -181,6 +185,12 @@ export function ChargerConfig({ h3Cell, location, onClose }: ChargerConfigProps)
             <span className="font-bold">{spec.installMonths} months</span>
           </div>
         </div>
+
+        {!cellData && (
+          <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg text-[10px] text-amber-700">
+            Spatial data unavailable for this cell. Impact estimates will be excluded for this placement.
+          </div>
+        )}
 
         <button onClick={handlePlace} className="btn-primary w-full text-xs">
           Place {chargerCount} × {spec.label.split('(')[0].trim()}

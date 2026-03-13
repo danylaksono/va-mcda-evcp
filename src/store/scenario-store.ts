@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Scenario, EVCPPlacement, ChargerType, CriterionPolarity, ImpactEstimate } from '@/analysis/types'
+import type { Scenario, EVCPPlacement, ChargerType, CriterionPolarity, ImpactEstimate, PlacementCellData } from '@/analysis/types'
 
 const STORAGE_KEY = 'va-mcda-evcp-scenarios'
 
@@ -11,9 +11,9 @@ interface ScenarioState {
   isSimulationMode: boolean
   selectedPlacementCell: string | null
 
-  addPlacement: (h3Cell: string, chargerType: ChargerType, chargerCount: number) => void
+  addPlacement: (h3Cell: string, chargerType: ChargerType, chargerCount: number, lsoaCode?: string, cellData?: PlacementCellData) => void
   removePlacement: (h3Cell: string) => void
-  updatePlacement: (h3Cell: string, chargerType: ChargerType, chargerCount: number) => void
+  updatePlacement: (h3Cell: string, chargerType: ChargerType, chargerCount: number, lsoaCode?: string, cellData?: PlacementCellData) => void
   setPlacements: (placements: EVCPPlacement[]) => void
   clearPlacements: () => void
   setCurrentImpact: (impact: ImpactEstimate | null) => void
@@ -47,16 +47,16 @@ export const useScenarioStore = create<ScenarioState>((set, get) => ({
   isSimulationMode: false,
   selectedPlacementCell: null,
 
-  addPlacement: (h3Cell, chargerType, chargerCount) => {
+  addPlacement: (h3Cell, chargerType, chargerCount, lsoaCode, cellData) => {
     const existing = get().currentPlacements.find((p) => p.h3Cell === h3Cell)
     if (existing) {
-      get().updatePlacement(h3Cell, chargerType, chargerCount)
+      get().updatePlacement(h3Cell, chargerType, chargerCount, lsoaCode, cellData)
       return
     }
     set({
       currentPlacements: [
         ...get().currentPlacements,
-        { h3Cell, chargerType, chargerCount, timestamp: Date.now() },
+        { h3Cell, chargerType, chargerCount, timestamp: Date.now(), lsoaCode, cellData },
       ],
     })
   },
@@ -67,10 +67,10 @@ export const useScenarioStore = create<ScenarioState>((set, get) => ({
     })
   },
 
-  updatePlacement: (h3Cell, chargerType, chargerCount) => {
+  updatePlacement: (h3Cell, chargerType, chargerCount, lsoaCode, cellData) => {
     set({
       currentPlacements: get().currentPlacements.map((p) =>
-        p.h3Cell === h3Cell ? { ...p, chargerType, chargerCount, timestamp: Date.now() } : p
+        p.h3Cell === h3Cell ? { ...p, chargerType, chargerCount, timestamp: Date.now(), lsoaCode, cellData } : p
       ),
     })
   },
