@@ -1,0 +1,163 @@
+% roth_taxonomy_analysis.tex
+% Grounding the dashboard design in Roth's interaction taxonomy
+% Standalone supplementary section — extract and integrate as needed
+
+\section{Interaction Design Through the Lens of Roth's Taxonomy}
+\label{sec:roth-taxonomy}
+
+The design of the platform's interactive features can be systematically understood through Roth's~\cite{roth2013taxonomy} empirically-derived taxonomy of interaction primitives for interactive cartography and geovisualisation. Roth distinguishes two primitive classes: \emph{objective primitives}, which describe the analytical tasks a user seeks to accomplish, and \emph{operator primitives}, which describe the interactive mechanisms the system provides to support those tasks. Roth further decomposes operators into \emph{enabling operators} that manage the analytical workflow (import, export, save, edit, annotate) and \emph{work operators} that transform the visual representation or the underlying data (reexpress, arrange, sequence, resymbolize, overlay, pan, zoom, reproject, search, filter, retrieve, calculate). This two-axis framework---what the user wants to \emph{do} versus what the system lets the user \emph{use}---provides a structured vocabulary for evaluating the interaction richness of a map-based decision support system.
+
+Roth's taxonomy builds on earlier efforts to systematise interaction in information visualisation, notably Yi et al.'s~\cite{yi2007interaction} seven-category framework organised around user intent (\emph{select}, \emph{explore}, \emph{reconfigure}, \emph{encode}, \emph{abstract/elaborate}, \emph{filter}, \emph{connect}). However, Roth's contribution extends this work specifically to the cartographic and geovisual analytics domain, introducing map-specific operators (e.g., \emph{reproject}, \emph{overlay}) and situating objectives along a scale of cognitive sophistication---from low-level \emph{identification} of individual values to higher-level \emph{association} and \emph{delineation} of spatial patterns. This graduated cognitive framework is particularly relevant to spatial MCDA, where the analytical workflow itself progresses from data inspection through ranking and comparison to associative reasoning about cause-and-consequence relationships.
+
+The following subsections map the platform's interaction design to Roth's objective and operator primitives, drawing on concrete examples from the system's implementation.
+
+%--------------------------------------------------------------
+\subsection{Objective Primitives}
+\label{sec:roth-objectives}
+
+Roth identifies five objective primitives that increase in cognitive sophistication. Table~\ref{tab:roth-objectives} maps each objective to the platform's supporting interactions.
+
+\begin{table*}[htbp]
+\centering
+\caption{Mapping of Roth's objective primitives to platform interactions. Objectives are ordered by increasing cognitive sophistication.}
+\label{tab:roth-objectives}
+\small
+\begin{tabular}{p{2.1cm}p{3.2cm}p{10.4cm}}
+\toprule
+\textbf{Objective} & \textbf{Definition} & \textbf{Platform interactions} \\
+\midrule
+Identify & Retrieve the value of a single spatial element &
+  Hovering over an H3 cell on the choropleth displays a tooltip with the cell's MCDA score, LSOA code, and borough name. Hovering over a glyph shows the criterion value profile for that cell. KPI cards in the Impact Panel present named metric values (e.g., ``Carbon saved: 312 tCO\textsubscript{2}/yr'') for the current scenario. The AHP panel displays the derived weight and consistency ratio for the current pairwise comparison matrix. \\
+\addlinespace
+Compare & Evaluate two or more spatial elements against each other &
+  The glyph comparison mode allows a user to click one glyph to pin its profile as a solid reference, then hover over a second glyph to see a dashed outline of the pinned profile overlaid on the hovered profile, enabling direct pairwise comparison of criterion vectors. The radar chart in the Impact Panel overlays multiple saved scenario polygons on a common axis set, normalised to the global maximum per metric, enabling visual comparison of scenario performance profiles. Switching MCDA methods (WSM $\rightarrow$ WPM $\rightarrow$ TOPSIS) allows comparison of how the ranking responds to different aggregation assumptions. The DFES timeseries renders multiple demand pathway curves simultaneously, supporting comparison of optimistic and pessimistic adoption trajectories. \\
+\addlinespace
+Rank & Order spatial elements by a quantitative attribute &
+  The core MCDA scoring operation produces a ranked ordering of all H3 cells by suitability. The choropleth encodes this ranking through a perceptually uniform colour scale (\texttt{viridis}), enabling visual assessment of rank patterns across the study area. The parallel coordinates display arranges criteria on vertical axes with weight handles, providing a secondary ranking view of criterion importance. The DFES panel's year-of-constriction markers implicitly rank demand pathways by the urgency of their capacity constraint. \\
+\addlinespace
+Associate & Establish relationships between spatial elements or between spatial and non-spatial attributes &
+  The coordinated linking model supports associative reasoning: clicking an H3 cell updates the DFES panel to show demand projections for that cell's LSOA or borough, establishing a spatial-to-temporal association. Placing chargers and observing KPI updates establishes an association between location choice and impact outcome. The supply--demand overlay on the DFES chart associates the scenario's energy output with projected technology adoption trajectories. The LSOA breakdown in the Impact Panel associates each administrative area with its aggregated impact contribution. Adjusting a criterion weight in the parallel coordinates and observing the choropleth response establishes a weight-to-suitability association. \\
+\addlinespace
+Delineate & Identify spatial structure, clusters, or regions of interest &
+  The choropleth and glyph overlays at varying H3 resolutions (r5--r10) support visual identification of spatial clusters of high- or low-suitability cells. The green/red shading on the DFES chart delineates temporal regions of adequate versus insufficient supply. The scope toggle (Network $\rightarrow$ Borough $\rightarrow$ LSOA) delineates geographic units of analysis. The per-LSOA breakdown table delineates spatial sub-regions within a multi-placement scenario by their impact contribution. LSOA boundary and borough boundary overlays provide explicit delineation of administrative regions against which suitability patterns can be assessed. \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+A notable feature of the platform is that it supports all five objectives within a single analytical session. A typical workflow (Section~\ref{sec:use-case}) begins with low-level identification (reading cell values), progresses through ranking (inspecting the choropleth) and comparison (pinning and comparing glyphs, switching MCDA methods), advances to association (linking placements to impact KPIs and DFES projections), and culminates in delineation (identifying spatial clusters of opportunity and temporal regions of sufficiency). This progression mirrors Roth's ordering of cognitive sophistication and reflects the exploratory nature of multi-criteria spatial planning.
+
+Roth also identifies three broader user goals that sit above the five objectives: \emph{procure} (acquire information), \emph{predict} (anticipate future states), and \emph{prescribe} (recommend actions). The platform's analytical workflow maps onto all three. The MCDA suitability analysis supports \emph{procure}: the planner acquires ranked spatial information about candidate locations. The DFES contextualisation supports \emph{predict}: the planner anticipates when a deployment will become insufficient under different demand pathways. The scenario comparison and export workflow supports \emph{prescribe}: the planner evaluates alternatives and recommends a preferred deployment strategy.
+
+%--------------------------------------------------------------
+\subsection{Operator Primitives}
+\label{sec:roth-operators}
+
+Roth categorises operators into enabling operators (workflow management) and work operators (analytical transformation). Table~\ref{tab:roth-operators} maps the platform's features to these categories.
+
+\subsubsection{Enabling Operators}
+
+Enabling operators manage the analytical session rather than transforming the visual representation.
+
+\begin{description}[nosep, leftmargin=0pt, itemindent=0pt]
+    \item[Save.] The Scenario Manager allows users to save the complete analytical state---criterion weights, MCDA method, criterion polarities, AHP comparison matrix, and all charger placements---as a named scenario, persisted to local storage. Saved scenarios can be restored, re-examined, and compared.
+
+    \item[Export / Import.] Scenarios can be exported as JSON files and imported from previously exported files, supporting transfer between sessions, devices, or collaborators.
+
+    \item[Edit.] Placements can be edited (charger type, count) or removed after creation. The AHP comparison matrix can be revised by adjusting individual pairwise values. Criterion weights can be continuously edited via the parallel coordinate drag handles.
+
+    \item[Annotate.] Scenarios carry user-assigned names and timestamps that serve as annotations for later identification. The reverse-geocoded address attached to each placement provides a human-readable annotation of the selected location.
+\end{description}
+
+\subsubsection{Work Operators}
+
+Work operators transform the visual representation or the underlying analytical computation. The platform implements 11 of Roth's 12 work operators (all except \emph{reproject}, as the map uses a fixed Web Mercator projection).
+
+\begin{description}[nosep, leftmargin=0pt, itemindent=0pt]
+    \item[Reexpress.] Switching between MCDA methods (WSM, WPM, TOPSIS) reexpresses the same underlying criterion data through a different analytical lens. Switching between choropleth and glyph overlays reexpresses spatial suitability from a single composite score to a multi-variate criterion profile. Switching between rose and bar glyph types reexpresses the same multi-variate data using different visual metaphors.
+
+    \item[Arrange.] The glyph aggregation resolution control (H3 r6--r10) rearranges the spatial granularity of the glyph display. The hierarchical H3 aggregation, which adapts display resolution to zoom level, constitutes an automatic arrangement of the choropleth data.
+
+    \item[Sequence.] The DFES timeseries chart sequences demand projections over time (2025--2050). The scope toggle (Network $\rightarrow$ Borough $\rightarrow$ LSOA) sequences geographic granularity from coarse to fine. The parallel coordinate display sequences criteria vertically, with the criterion ordering reflecting user-defined importance.
+
+    \item[Resymbolize.] The opacity slider resymbolises the choropleth by adjusting transparency. The colour scale selection (viridis, plasma, inferno, etc.) resymbolises the same suitability score data through different perceptual colour ramps. The glyph size scale control resymbolises glyph magnitude. Toggling criterion polarity (benefit $\leftrightarrow$ cost) resymbolises a criterion's meaning—the hatch pattern on glyph petals provides visual confirmation of this state change.
+
+    \item[Overlay.] PMTiles-based reference layers (LSOA boundaries, borough boundaries, existing charge points) can be toggled on and off as overlays atop the MCDA choropleth. The glyph layer itself is an overlay on the choropleth. The DFES supply line and green/red shading are overlaid on the demand pathway curves. Scenario weight profiles are overlaid as polylines on the parallel coordinate display.
+
+    \item[Pan.] Standard map panning via click-and-drag, supported natively by the MapLibre GL rendering engine. The AHP graph interface also supports panning via pointer capture, enabling navigation of large comparison networks.
+
+    \item[Zoom.] Map zoom via scroll wheel or controls triggers automatic H3 resolution adaptation (zoom 14+ $\rightarrow$ r10, zoom 8 $\rightarrow$ r7, etc.), providing a semantic zoom that adjusts not just scale but data aggregation. The AHP graph supports scroll-wheel zoom for inspecting dense comparison networks.
+
+    \item[Search.] The DFES panel includes an LSOA search interface: the user types a partial LSOA name, and matching options are retrieved from the DuckDB database. Selecting a result scopes the DFES data and updates the map selection. The Scenario Manager includes a text search for filtering saved scenarios by name.
+
+    \item[Filter.] Criteria can be toggled active or inactive, which filters them out of the MCDA computation and the glyph display. The 200\,ms debounce on weight updates acts as an implicit temporal filter, preventing intermediate states from triggering expensive recomputations. The DFES pathway toggle filters which demand pathways are rendered. The scenario visibility toggle filters which scenarios appear in the parallel coordinates and radar chart.
+
+    \item[Retrieve.] Clicking an H3 cell in simulation mode retrieves its full data record from the DuckDB query result, including raw and normalised criterion values, LSOA code, LSOA name, and borough name—all displayed in the placement configuration popover. The DFES tooltip retrieves interpolated pathway values at the cursor's $x$-position. KPI cards retrieve and display the aggregated impact estimate for the current scenario.
+
+    \item[Calculate.] This is the most distinctive operator in the platform. MCDA scoring is a \emph{calculate} operation that transforms raw criterion vectors into composite suitability scores via the selected aggregation method. The AHP solver calculates priority weights and consistency metrics from the pairwise comparison matrix. The impact model calculates energy delivery, carbon savings, grid stress, and financial indicators from placement parameters and cell attributes. The DFES metric conversion calculates the scenario's supply in DFES-commensurate units. The year-of-constriction computation calculates the temporal intersection of supply and demand. Unlike most map-based visualisations, where \emph{calculate} is limited to simple derived measures, this platform makes \emph{calculate} a central and continuously invoked operator through which the user steers the analytical process.
+\end{description}
+
+Table~\ref{tab:roth-operators} provides a condensed summary.
+
+\begin{table*}[htbp]
+\centering
+\caption{Mapping of Roth's operator primitives to platform features. Enabling operators manage the analytical session; work operators transform the visual representation or underlying computation.}
+\label{tab:roth-operators}
+\small
+\begin{tabular}{llp{11cm}}
+\toprule
+\textbf{Class} & \textbf{Operator} & \textbf{Platform implementation} \\
+\midrule
+\multirow{4}{*}{\rotatebox[origin=c]{90}{\footnotesize Enabling}}
+  & Save     & Save scenario (weights, method, AHP matrix, placements) to local storage \\
+  & Export   & Export scenarios as JSON; download for sharing \\
+  & Import   & Import JSON scenario files from collaborators or prior sessions \\
+  & Edit     & Modify placements (type, count, remove); revise AHP values; drag weight handles \\
+  & Annotate & Name scenarios; reverse-geocode placement addresses; attach timestamps \\
+\midrule
+\multirow{11}{*}{\rotatebox[origin=c]{90}{\footnotesize Work}}
+  & Reexpress   & Switch MCDA method; switch choropleth $\leftrightarrow$ glyph; switch bar $\leftrightarrow$ rose glyphs \\
+  & Arrange     & Glyph aggregation resolution (r6--r10); zoom-adaptive H3 resolution \\
+  & Sequence    & DFES timeseries (2025--2050); scope toggle (Network $\rightarrow$ Borough $\rightarrow$ LSOA) \\
+  & Resymbolize & Opacity slider; colour scale selection; glyph size; polarity toggle (benefit $\leftrightarrow$ cost) \\
+  & Overlay     & LSOA/borough boundaries; existing chargepoints; glyph layer; DFES supply line; scenario weight polylines \\
+  & Pan         & Map drag; AHP graph panning \\
+  & Zoom        & Semantic zoom (zoom level $\rightarrow$ H3 resolution); AHP graph zoom \\
+  & Search      & LSOA name search in DFES panel; scenario name search in Scenario Manager \\
+  & Filter      & Toggle criteria on/off; toggle DFES pathways; toggle scenario visibility \\
+  & Retrieve    & Cell click $\rightarrow$ criterion values, LSOA, borough; DFES tooltip; KPI cards \\
+  & Calculate   & MCDA scoring (WSM/WPM/TOPSIS); AHP solver; impact model; metric conversion; year of constriction \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+%--------------------------------------------------------------
+\subsection{Interaction Operands: Space, Attributes, and Time}
+\label{sec:roth-operands}
+
+Roth's taxonomy also considers \emph{interaction operands}---the data dimensions on which operators act---categorised as \emph{space-alone}, \emph{attributes-in-space}, and \emph{space-in-time}. A distinctive feature of this platform is that interactions span all three operand classes within a single coordinated environment:
+
+\begin{itemize}[nosep]
+    \item \textbf{Space-alone}: pan, zoom, overlay of administrative boundaries, scope toggle between geographic units.
+    \item \textbf{Attributes-in-space}: MCDA scoring, weight adjustment, glyph encoding of multi-variate criterion profiles, charger placement and impact estimation, per-LSOA breakdown.
+    \item \textbf{Space-in-time}: DFES timeseries contextualisation, year-of-constriction analysis, supply--demand overlay that links spatial deployment decisions to temporal demand trajectories.
+\end{itemize}
+
+\noindent Most spatial decision support systems operate primarily in the \emph{attributes-in-space} operand class~\cite{roth2013taxonomy,andrienko2007geovisual}. By extending into \emph{space-in-time} through the DFES integration, the platform enables a form of temporal reasoning that is rare in MCDA-based siting tools: the planner can assess not only \emph{where} to deploy infrastructure but \emph{how long} a deployment will remain adequate under projected demand growth.
+
+%--------------------------------------------------------------
+\subsection{The Centrality of \emph{Calculate}}
+\label{sec:roth-calculate}
+
+Among Roth's twelve work operators, \emph{calculate} occupies a distinctive role in this platform. In many interactive map systems, \emph{calculate} is limited to simple derived measures---distances, areas, or counts~\cite{roth2013taxonomy}. In the present system, \emph{calculate} is a continuously invoked operator that drives the core analytical workflow: every weight adjustment triggers a full MCDA recalculation across 118,000 cells, every charger placement triggers an impact estimation pipeline, and every scope change triggers a DFES metric conversion and year-of-constriction computation.
+
+This design reflects the platform's visual analytics orientation~\cite{keim2008visual}: the computational analysis (MCDA scoring, impact estimation, temporal projection) is not a preprocessing step but an interactive process that the user steers through direct manipulation. The immediate feedback loop---adjust weight $\rightarrow$ recompute scores $\rightarrow$ update choropleth---exemplifies what Yi et al.~\cite{yi2007interaction} call \emph{reconfigure}: the user restructures the spatial representation by changing the analytical parameters that generate it. However, where Yi et al.'s framework treats the output of computation as a static visual encoding, Roth's \emph{calculate} operator explicitly acknowledges the computational transformation as an interaction in its own right---one that the user initiates, parameterises, and interprets within the visual interface.
+
+The client-side DuckDB-WASM architecture (Section~\ref{sec:data-pipeline}) is critical to sustaining \emph{calculate} as an interactive operator. If the MCDA scoring query required a server round-trip, the latency would break the tight feedback loop that makes weight exploration feel direct and responsive. By executing the scoring query in-browser in under 200\,ms, the system maintains the perceptual continuity required for the \emph{calculate} operator to function as a genuine interaction primitive rather than a batch operation.
+
+%--------------------------------------------------------------
+\subsection{Summary}
+\label{sec:roth-summary}
+
+Mapping the platform to Roth's taxonomy reveals that it provides broad coverage of both objective and operator primitives: all five cognitive objectives (identify through delineate), four of five enabling operators, and eleven of twelve work operators. This breadth reflects the platform's design goal of supporting the full analytical cycle of spatial MCDA---from data inspection through ranking, comparison, associative reasoning, and prescriptive scenario evaluation---within a single interactive environment.
+
+The analysis also highlights the \emph{calculate} operator as a distinguishing feature. In conventional interactive maps, the dominant operators are spatial navigation (pan, zoom) and visual adjustment (resymbolize, overlay). In this platform, \emph{calculate} is the most frequently invoked operator, reflecting the analytical rather than purely visual nature of the system. This positions the platform within the visual analytics paradigm~\cite{keim2008visual}, where the integration of interactive computation with visual representation is the central design principle.
