@@ -51,6 +51,7 @@ type RadarEntry = {
   id: string
   label: string
   impact: ImpactEstimate
+  mode: 'hidden' | 'muted' | 'highlighted' | 'draft'
   stroke: string
   fill: string
   strokeWidth: number
@@ -94,13 +95,14 @@ export function KPIRadarChart({ currentImpact, scenarios, activeScenarioId }: KP
         id: scenario.id,
         label: scenario.name,
         impact: scenario.impactSummary,
+        mode: info.mode,
         stroke: info.style.stroke,
         fill: info.mode === 'muted'
-          ? `rgba(148, 163, 184, 0.04)`
-          : `rgba(${r}, ${g}, ${b}, 0.12)`,
-        strokeWidth: info.mode === 'muted' ? 0.5 : 2,
-        opacity: info.style.opacity,
-        dotRadius: info.mode === 'muted' ? 0 : 2,
+          ? 'rgba(148, 163, 184, 0.035)'
+          : `rgba(${r}, ${g}, ${b}, 0.10)`,
+        strokeWidth: info.mode === 'muted' ? 1 : 3.25,
+        opacity: info.mode === 'muted' ? Math.min(info.style.opacity, 0.18) : 0.92,
+        dotRadius: info.mode === 'muted' ? 0 : 3.5,
         isDraft: false,
       })
     })
@@ -111,11 +113,12 @@ export function KPIRadarChart({ currentImpact, scenarios, activeScenarioId }: KP
         id: 'current',
         label: 'Current draft',
         impact: currentImpact,
+        mode: 'draft',
         stroke: draft.stroke,
         fill: 'rgba(15, 23, 42, 0.08)',
-        strokeWidth: 2.5,
-        opacity: 0.85,
-        dotRadius: 3,
+        strokeWidth: 3.75,
+        opacity: 0.95,
+        dotRadius: 4,
         isDraft: true,
       })
     }
@@ -130,14 +133,19 @@ export function KPIRadarChart({ currentImpact, scenarios, activeScenarioId }: KP
       Math.max(...entries.map((e) => metric.getValue(e.impact)), 0)
     )
 
-    return entries.map((entry) => ({
-      ...entry,
-      values: METRICS.map((metric, i) => {
-        const max = maxPerMetric[i]
-        if (max <= 0) return 0
-        return Math.min(1, metric.getValue(entry.impact) / max)
-      }),
-    }))
+    return entries
+      .map((entry) => ({
+        ...entry,
+        values: METRICS.map((metric, i) => {
+          const max = maxPerMetric[i]
+          if (max <= 0) return 0
+          return Math.min(1, metric.getValue(entry.impact) / max)
+        }),
+      }))
+      .sort((a, b) => {
+        const order = { hidden: -1, muted: 0, highlighted: 1, draft: 2 }
+        return order[a.mode] - order[b.mode]
+      })
   }, [entries])
 
   const size = 248
@@ -215,6 +223,17 @@ export function KPIRadarChart({ currentImpact, scenarios, activeScenarioId }: KP
 
           {normalizedEntries.map((entry) => (
             <g key={entry.id}>
+              {entry.mode !== 'muted' && (
+                <polygon
+                  points={polygonPoints(entry.values)}
+                  fill="none"
+                  stroke="rgba(255,255,255,0.92)"
+                  strokeWidth={entry.strokeWidth + 2.5}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  vectorEffect="non-scaling-stroke"
+                />
+              )}
               <polygon
                 points={polygonPoints(entry.values)}
                 fill={entry.fill}
@@ -222,6 +241,9 @@ export function KPIRadarChart({ currentImpact, scenarios, activeScenarioId }: KP
                 strokeWidth={entry.strokeWidth}
                 strokeOpacity={entry.opacity}
                 fillOpacity={entry.opacity}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                vectorEffect="non-scaling-stroke"
               >
                 <title>
                   {`${entry.label}\n${METRICS.map((m) => `${m.label}: ${formatMetricValue(m.key, entry.impact)}`).join('\n')}`}
@@ -239,6 +261,9 @@ export function KPIRadarChart({ currentImpact, scenarios, activeScenarioId }: KP
                       r={entry.dotRadius}
                       fill={entry.stroke}
                       fillOpacity={entry.opacity}
+                      stroke="white"
+                      strokeWidth={entry.mode === 'muted' ? 0 : 1.5}
+                      vectorEffect="non-scaling-stroke"
                     >
                       <title>{`${entry.label} - ${metric.label}: ${formatMetricValue(metric.key, entry.impact)}`}</title>
                     </circle>

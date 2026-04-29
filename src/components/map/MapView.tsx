@@ -15,7 +15,7 @@ import { useScenarioStore } from '@/store/scenario-store'
 import { h3ScoresToGeoJSON, getH3Center } from '@/utils/h3-utils'
 import { scoreToColor } from '@/utils/color-scales'
 import { ChargerConfig } from '../impact/ChargerConfig'
-import { SlidersHorizontal, Zap } from 'lucide-react'
+import { Maximize2, Minimize2, SlidersHorizontal, Zap } from 'lucide-react'
 import type { EVCPPlacement, PlacementCellData } from '@/analysis/types'
 import { buildScenarioRenderList, MUTED_COLOR } from '@/scenarios/scenario-styles'
 
@@ -45,11 +45,17 @@ interface ClickLocation {
   lng: number
 }
 
+type GlyphContrastMode = 'true' | 'rank'
+
 const LONDON_CENTER: [number, number] = [-0.1276, 51.5074]
 const BASEMAP_STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
 const EVCP_CURSOR_SVG = `<svg xmlns='http://www.w3.org/2000/svg' width='34' height='34' viewBox='0 0 34 34'><path fill='%23dc2626' d='M17 33s10-11.2 10-18A10 10 0 1 0 7 15c0 6.8 10 18 10 18Z'/><circle cx='17' cy='14.5' r='6.3' fill='%23fff'/><path fill='%230f172a' d='M18 10h-2.2l-.8 4h2.1l-.8 4 3.7-5h-2.1z'/></svg>`
 const EVCP_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(EVCP_CURSOR_SVG)}") 17 31, crosshair`
 const CHARGEPOINT_ICON_ID = 'chargepoint-marker'
+const GLYPH_SIZE_MIN = 0.5
+const GLYPH_SIZE_MAX = 3.8
+const GLYPH_CONTRAST_MIN = 0
+const GLYPH_CONTRAST_MAX = 1
 // const CHARGEPOINT_ICON_URL = '/icons/chargepoint-marker.svg'
 
 type OverlayConfig =
@@ -196,6 +202,44 @@ const buildOverlayLayer = (
   }
 }
 
+const clamp01 = (value: number) => {
+  if (!Number.isFinite(value)) return 0
+  return Math.max(0, Math.min(1, value))
+}
+
+const computeRankValues = (
+  rows: Array<{ h3Cell: string; criterionValues: Record<string, number> }>,
+  criterionId: string
+) => {
+  const ranked = rows
+    .map((row) => ({
+      h3Cell: row.h3Cell,
+      value: clamp01(row.criterionValues[criterionId] ?? 0),
+    }))
+    .sort((a, b) => a.value - b.value)
+
+  const ranks = new Map<string, number>()
+  const lastIndex = ranked.length - 1
+  if (lastIndex <= 0) {
+    for (const row of ranked) ranks.set(row.h3Cell, row.value)
+    return ranks
+  }
+
+  for (let i = 0; i < ranked.length;) {
+    let j = i + 1
+    while (j < ranked.length && ranked[j].value === ranked[i].value) {
+      j += 1
+    }
+    const percentile = ((i + j - 1) / 2) / lastIndex
+    for (let k = i; k < j; k += 1) {
+      ranks.set(ranked[k].h3Cell, percentile)
+    }
+    i = j
+  }
+
+  return ranks
+}
+
 export function MapView({ mcdaResults }: MapViewProps) {
   const mapContainer = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
@@ -212,9 +256,12 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const [showGlyphLayer, setShowGlyphLayer] = useState(false)
   const [showTooltips, setShowTooltips] = useState(false)
   const [showLayerPanel, setShowLayerPanel] = useState(true)
+  const [isMapFullscreen, setIsMapFullscreen] = useState(false)
   const [glyphType, setGlyphType] = useState<'bars' | 'rose'>('bars')
   const [glyphAggregation, setGlyphAggregation] = useState<'auto' | 6 | 7 | 8 | 9 | 10>(7)
   const [glyphSizeScale, setGlyphSizeScale] = useState(1)
+  const [glyphContrastMode, setGlyphContrastMode] = useState<GlyphContrastMode>('rank')
+  const [glyphContrastStrength, setGlyphContrastStrength] = useState(0.65)
   const [comparisonGlyph, setComparisonGlyph] = useState<GlyphDatum | null>(null)
   const [selectedClickLocation, setSelectedClickLocation] = useState<ClickLocation | null>(null)
   const [placementCellData, setPlacementCellData] = useState<PlacementCellData | null>(null)
@@ -756,7 +803,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
       setGlyphSizeScale((prev) => {
         const delta = event.deltaY < 0 ? 0.08 : -0.08
         const next = prev + delta
-        return Math.max(0.5, Math.min(2.8, Number(next.toFixed(2))))
+        return Math.max(GLYPH_SIZE_MIN, Math.min(GLYPH_SIZE_MAX, Number(next.toFixed(2))))
       })
     }
 
@@ -771,6 +818,33 @@ export function MapView({ mcdaResults }: MapViewProps) {
       setComparisonGlyph(null)
     }
   }, [showGlyphLayer])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+
+    const frame = window.requestAnimationFrame(() => map.resize())
+    return () => window.cancelAnimationFrame(frame)
+  }, [isMapFullscreen])
+
+  useEffect(() => {
+    if (!isMapFullscreen) return
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsMapFullscreen(false)
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [isMapFullscreen])
 
   useEffect(() => {
     initMap()
@@ -1032,15 +1106,40 @@ export function MapView({ mcdaResults }: MapViewProps) {
       }
     })
 
+    const rankValuesByCriterion = new Map<string, Map<string, number>>()
+    if (glyphContrastMode === 'rank' && glyphContrastStrength > 0) {
+      for (const criterion of activeCriteria) {
+        rankValuesByCriterion.set(criterion.id, computeRankValues(aggregated, criterion.id))
+      }
+    }
+
+    const displayRows = aggregated.map((row) => {
+      const displayValues: Record<string, number> = {}
+      for (const criterion of activeCriteria) {
+        const trueValue = clamp01(row.criterionValues[criterion.id] ?? 0)
+        const contrastValue =
+          glyphContrastMode === 'rank'
+            ? rankValuesByCriterion.get(criterion.id)?.get(row.h3Cell) ?? trueValue
+            : trueValue
+        displayValues[criterion.id] = clamp01(
+          trueValue * (1 - glyphContrastStrength) + contrastValue * glyphContrastStrength
+        )
+      }
+      return {
+        ...row,
+        displayValues,
+      }
+    })
+
     const selectedGlyph = comparisonGlyph
-      ? aggregated.find((row) => row.h3Cell === comparisonGlyph.h3Cell) ?? null
+      ? displayRows.find((row) => row.h3Cell === comparisonGlyph.h3Cell) ?? null
       : null
 
     if (comparisonGlyph && !selectedGlyph) {
       setComparisonGlyph(null)
     }
 
-    for (const row of aggregated) {
+    for (const row of displayRows) {
       let lat = 0
       let lng = 0
       try {
@@ -1052,13 +1151,19 @@ export function MapView({ mcdaResults }: MapViewProps) {
       const baseHeight = glyphType === 'rose' ? 42 : 34
       const markerHeight = Math.round(baseHeight * glyphSizeScale)
       const markerWidth = glyphType === 'rose' ? markerHeight : Math.round(markerHeight * 1.25)
+      const dpr = Math.max(1, window.devicePixelRatio || 1)
+      const isSelectedGlyph = selectedGlyph?.h3Cell === row.h3Cell
 
       const canvas = document.createElement('canvas')
-      canvas.width = markerWidth
-      canvas.height = markerHeight
+      canvas.width = Math.round(markerWidth * dpr)
+      canvas.height = Math.round(markerHeight * dpr)
+      canvas.style.width = `${markerWidth}px`
+      canvas.style.height = `${markerHeight}px`
+      canvas.style.display = 'block'
 
       const ctx = canvas.getContext('2d')
       if (!ctx) continue
+      ctx.scale(dpr, dpr)
 
       const patternCanvas = document.createElement('canvas')
       patternCanvas.width = 5
@@ -1074,29 +1179,11 @@ export function MapView({ mcdaResults }: MapViewProps) {
       }
       const costPattern = ctx.createPattern(patternCanvas, 'repeat')
 
-      const radius = 4
-      ctx.fillStyle = 'rgba(255,255,255,0.9)'
-      ctx.strokeStyle = 'rgba(15,23,42,0.35)'
-      ctx.lineWidth = 1
-      ctx.beginPath()
-      ctx.moveTo(radius, 0)
-      ctx.lineTo(markerWidth - radius, 0)
-      ctx.quadraticCurveTo(markerWidth, 0, markerWidth, radius)
-      ctx.lineTo(markerWidth, markerHeight - radius)
-      ctx.quadraticCurveTo(markerWidth, markerHeight, markerWidth - radius, markerHeight)
-      ctx.lineTo(radius, markerHeight)
-      ctx.quadraticCurveTo(0, markerHeight, 0, markerHeight - radius)
-      ctx.lineTo(0, radius)
-      ctx.quadraticCurveTo(0, 0, radius, 0)
-      ctx.closePath()
-      ctx.fill()
-      ctx.stroke()
-
       if (glyphType === 'rose') {
         const centerX = markerWidth / 2
         const centerY = markerHeight / 2
         const innerRadius = 0
-        const outerRadiusMax = markerWidth * 0.46
+        const outerRadiusMax = markerWidth * 0.45
         const petals = activeCriteria.length
         const angleStep = (Math.PI * 2) / petals
         const gapAngle = Math.min(angleStep * 0.12, (2 * Math.PI) / 180)
@@ -1113,7 +1200,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
 
         for (let i = 0; i < petals; i += 1) {
           const criterion = activeCriteria[i]
-          const raw = row.criterionValues[criterion.id] ?? 0
+          const raw = row.displayValues[criterion.id] ?? 0
           const value = Math.max(0, Math.min(1, raw))
           const segmentStart = -Math.PI / 2 + i * angleStep
           const segmentEnd = segmentStart + angleStep
@@ -1150,45 +1237,20 @@ export function MapView({ mcdaResults }: MapViewProps) {
           }
         }
 
-        if (selectedGlyph) {
+        if (isSelectedGlyph) {
           ctx.save()
-          ctx.strokeStyle = row.h3Cell === selectedGlyph.h3Cell ? 'rgba(15,23,42,0.9)' : 'rgba(15,23,42,0.6)'
-          ctx.lineWidth = row.h3Cell === selectedGlyph.h3Cell ? 1.8 : 1.2
-          ctx.setLineDash([2, 2])
-
-          for (let i = 0; i < petals; i += 1) {
-            const criterion = activeCriteria[i]
-            const selectedValue = Math.max(
-              0,
-              Math.min(1, selectedGlyph.criterionValues[criterion.id] ?? 0)
-            )
-            const segmentStart = -Math.PI / 2 + i * angleStep
-            const segmentEnd = segmentStart + angleStep
-            const midAngle = (segmentStart + segmentEnd) / 2
-            const availableSweep = Math.max(0, angleStep - gapAngle * 2)
-            const weightNorm = Math.max(0.1, Math.min(1, Math.abs(criterion.weight) / maxWeight))
-            const sweep = Math.max(availableSweep * 0.18, availableSweep * weightNorm)
-            const startAngle = midAngle - sweep / 2
-            const endAngle = midAngle + sweep / 2
-            const selectedRadius = innerRadius + selectedValue * (outerRadiusMax - innerRadius)
-
-            ctx.beginPath()
-            ctx.moveTo(centerX, centerY)
-            ctx.arc(centerX, centerY, selectedRadius, startAngle, endAngle)
-            ctx.closePath()
-            ctx.stroke()
-          }
-
+          ctx.beginPath()
+          ctx.arc(centerX, centerY, outerRadiusMax + 1.5, 0, Math.PI * 2)
+          ctx.strokeStyle = 'rgba(15,23,42,0.5)'
+          ctx.lineWidth = 1.2
+          ctx.stroke()
           ctx.restore()
         }
 
         ctx.beginPath()
-        ctx.arc(centerX, centerY, 2.5, 0, Math.PI * 2)
-        ctx.fillStyle = 'rgba(255,255,255,0.95)'
+        ctx.arc(centerX, centerY, 2, 0, Math.PI * 2)
+        ctx.fillStyle = 'rgba(15,23,42,0.55)'
         ctx.fill()
-        ctx.strokeStyle = 'rgba(15,23,42,0.25)'
-        ctx.lineWidth = 1
-        ctx.stroke()
       } else {
         const paddingX = 5
         const paddingY = 4
@@ -1201,14 +1263,20 @@ export function MapView({ mcdaResults }: MapViewProps) {
         const barWidth = Math.max(1, Math.floor((chartWidth - (bars - 1) * gap) / bars))
 
         activeCriteria.forEach((criterion, index) => {
-          const raw = row.criterionValues[criterion.id] ?? 0
+          const raw = row.displayValues[criterion.id] ?? 0
           const clamped = Math.max(0, Math.min(1, raw))
           const barHeight = Math.max(1, Math.round(clamped * (chartHeight - 2)))
           const x = paddingX + index * (barWidth + gap)
           const y = baseline - barHeight
 
           ctx.fillStyle = criterion.color
+          ctx.shadowColor = 'rgba(255,255,255,0.65)'
+          ctx.shadowBlur = 1.5
           ctx.fillRect(x, y, barWidth, barHeight)
+          ctx.shadowBlur = 0
+          ctx.strokeStyle = 'rgba(15,23,42,0.18)'
+          ctx.lineWidth = 1
+          ctx.strokeRect(x + 0.5, y + 0.5, Math.max(1, barWidth - 1), Math.max(1, barHeight - 1))
 
           if (criterion.polarity === 'cost' && costPattern) {
             ctx.fillStyle = costPattern
@@ -1218,23 +1286,11 @@ export function MapView({ mcdaResults }: MapViewProps) {
           }
         })
 
-        if (selectedGlyph) {
+        if (isSelectedGlyph) {
           ctx.save()
-          ctx.strokeStyle = row.h3Cell === selectedGlyph.h3Cell ? 'rgba(15,23,42,0.95)' : 'rgba(15,23,42,0.62)'
-          ctx.lineWidth = row.h3Cell === selectedGlyph.h3Cell ? 1.8 : 1.2
-          ctx.setLineDash([2, 2])
-
-          activeCriteria.forEach((criterion, index) => {
-            const selectedValue = Math.max(
-              0,
-              Math.min(1, selectedGlyph.criterionValues[criterion.id] ?? 0)
-            )
-            const selectedHeight = Math.max(1, Math.round(selectedValue * (chartHeight - 2)))
-            const x = paddingX + index * (barWidth + gap)
-            const y = baseline - selectedHeight
-            ctx.strokeRect(x + 0.5, y + 0.5, Math.max(1, barWidth - 1), Math.max(1, selectedHeight - 1))
-          })
-
+          ctx.strokeStyle = 'rgba(15,23,42,0.55)'
+          ctx.lineWidth = 1.2
+          ctx.strokeRect(1.5, 1.5, markerWidth - 3, markerHeight - 3)
           ctx.restore()
         }
       }
@@ -1242,6 +1298,9 @@ export function MapView({ mcdaResults }: MapViewProps) {
       const markerElement = document.createElement('div')
       markerElement.style.pointerEvents = 'auto'
       markerElement.style.cursor = 'pointer'
+      markerElement.style.filter = isSelectedGlyph
+        ? 'drop-shadow(0 2px 5px rgba(15,23,42,0.42)) drop-shadow(0 0 3px rgba(255,255,255,0.95))'
+        : 'drop-shadow(0 1px 2px rgba(15,23,42,0.22))'
       markerElement.appendChild(canvas)
 
       const popup = getTooltipPopup()
@@ -1306,7 +1365,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
         .addTo(map)
       glyphMarkersRef.current.push(marker)
     }
-  }, [mcdaResults, criteria, showGlyphLayer, showTooltips, glyphAggregation, glyphType, glyphSizeScale, comparisonGlyph, clearGlyphMarkers, buildTooltipHtml, getTooltipPopup])
+  }, [mcdaResults, criteria, showGlyphLayer, showTooltips, glyphAggregation, glyphType, glyphSizeScale, glyphContrastMode, glyphContrastStrength, comparisonGlyph, clearGlyphMarkers, buildTooltipHtml, getTooltipPopup])
 
   const syncEvcpMarkers = useCallback((placements: typeof currentPlacements) => {
     const map = mapRef.current
@@ -1408,12 +1467,32 @@ export function MapView({ mcdaResults }: MapViewProps) {
   }, [applyLayerVisibility, syncEvcpMarkers])
 
   return (
-    <div className="relative flex-1">
+    <div
+      className={
+        isMapFullscreen
+          ? 'fixed inset-0 z-50 bg-white'
+          : 'relative flex-1'
+      }
+    >
       <div ref={mapContainer} className="w-full h-full" />
 
       <div className="absolute top-2 left-14 z-10">
         <div className="inline-flex overflow-hidden rounded-lg border border-slate-300 shadow-lg">
           <button
+            type="button"
+            onClick={() => setIsMapFullscreen((prev) => !prev)}
+            className="inline-flex h-9 w-9 items-center justify-center border-r border-slate-300 bg-white/95 text-slate-700 transition-colors hover:bg-slate-50"
+            aria-label={isMapFullscreen ? 'Exit full-screen map' : 'Show map full screen'}
+            title={isMapFullscreen ? 'Exit full-screen map' : 'Show map full screen'}
+          >
+            {isMapFullscreen ? (
+              <Minimize2 className="h-4 w-4" strokeWidth={2.4} />
+            ) : (
+              <Maximize2 className="h-4 w-4" strokeWidth={2.4} />
+            )}
+          </button>
+          <button
+            type="button"
             onClick={() => {
               const next = !isSimulationMode
               setSimulationMode(next)
@@ -1559,17 +1638,62 @@ export function MapView({ mcdaResults }: MapViewProps) {
             </div>
 
             <div className="mt-2">
-              {/* <div className="text-[10px] text-slate-500 mb-1">Glyph size</div>
-              <div className="text-xs text-slate-700">
-                {(glyphSizeScale * 100).toFixed(0)}%
-              </div> */}
-              {/* <div className="text-[10px] text-slate-500 mt-0.5">
-                Hold Shift + scroll to resize
-              </div> */}
+              <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
+                <span>Glyph size</span>
+                <span className="font-mono text-slate-600">{Math.round(glyphSizeScale * 100)}%</span>
+              </div>
+              <input
+                type="range"
+                min={GLYPH_SIZE_MIN}
+                max={GLYPH_SIZE_MAX}
+                step={0.05}
+                value={glyphSizeScale}
+                onChange={(e) => setGlyphSizeScale(Number(e.target.value))}
+                disabled={!showGlyphLayer}
+                className="w-full accent-slate-700"
+                aria-label="Glyph size"
+              />
+              <div className="text-[10px] text-slate-500 mt-0.5">
+                Hold Shift + scroll to resize on the map
+              </div>
+            </div>
+
+            <div className="mt-2">
+              <div className="text-[10px] text-slate-500 mb-1">Glyph contrast</div>
+              <select
+                value={glyphContrastMode}
+                onChange={(e) => setGlyphContrastMode(e.target.value as GlyphContrastMode)}
+                className="w-full text-xs rounded-md border border-slate-300 bg-white px-2 py-1"
+                disabled={!showGlyphLayer}
+              >
+                <option value="true">True scale</option>
+                <option value="rank">Rank contrast</option>
+              </select>
+            </div>
+
+            <div className="mt-2">
+              <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
+                <span>Contrast strength</span>
+                <span className="font-mono text-slate-600">{Math.round(glyphContrastStrength * 100)}%</span>
+              </div>
+              <input
+                type="range"
+                min={GLYPH_CONTRAST_MIN}
+                max={GLYPH_CONTRAST_MAX}
+                step={0.05}
+                value={glyphContrastStrength}
+                onChange={(e) => setGlyphContrastStrength(Number(e.target.value))}
+                disabled={!showGlyphLayer || glyphContrastMode === 'true'}
+                className="w-full accent-slate-700"
+                aria-label="Glyph contrast strength"
+              />
             </div>
 
             <div className="mt-2 text-[10px] text-slate-500">
               Pattern fill = cost criterion
+              {glyphContrastMode === 'rank' && glyphContrastStrength > 0
+                ? `; glyphs are ${Math.round(glyphContrastStrength * 100)}% rank-scaled`
+                : ''}
             </div>
             {/* {showGlyphLayer && (
               <div className="mt-1 text-[10px] text-slate-500">
@@ -1599,6 +1723,9 @@ export function MapView({ mcdaResults }: MapViewProps) {
             {glyphType === 'rose'
               ? 'Petal length shows criterion score; petal width follows criterion weight.'
               : 'Bar height shows criterion score.'}
+            {glyphContrastMode === 'rank' && glyphContrastStrength > 0
+              ? ` Display is blended ${Math.round(glyphContrastStrength * 100)}% toward per-criterion rank.`
+              : ''}
           </div>
           <div className="flex flex-col gap-1.5">
             {glyphLegendCriteria.map((criterion) => (
