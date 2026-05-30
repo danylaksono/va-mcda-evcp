@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import maplibregl from 'maplibre-gl'
+import { ScreenGridLayerGL } from 'screengrid'
 import type {
   LineLayerSpecification,
   CircleLayerSpecification,
@@ -16,7 +17,7 @@ import { h3ScoresToGeoJSON, getH3Center } from '@/utils/h3-utils'
 import { scoreToColor } from '@/utils/color-scales'
 import { ChargerConfig } from '../impact/ChargerConfig'
 import { Maximize2, Minimize2, SlidersHorizontal, Zap } from 'lucide-react'
-import type { EVCPPlacement, PlacementCellData } from '@/analysis/types'
+import type { Criterion, EVCPPlacement, PlacementCellData } from '@/analysis/types'
 import { buildScenarioRenderList, MUTED_COLOR } from '@/scenarios/scenario-styles'
 
 interface MapViewProps {
@@ -33,11 +34,28 @@ interface MapViewProps {
 
 interface GlyphDatum {
   h3Cell: string
+  label?: string
   score: number
   criterionValues: Record<string, number>
   rawValues: Record<string, number>
   lat: number
   lng: number
+}
+
+interface GlyphRenderRow extends GlyphDatum {
+  displayValues: Record<string, number>
+}
+
+interface ScreenGridCellDatum {
+  data?: GlyphRenderRow
+  weight?: number
+}
+
+interface ScreenGridCellInfo {
+  cellData?: ScreenGridCellDatum[]
+  cellSize?: number
+  glyphRadius?: number
+  index?: number
 }
 
 interface ClickLocation {
@@ -46,17 +64,51 @@ interface ClickLocation {
 }
 
 type GlyphContrastMode = 'true' | 'rank'
+type GlyphRenderer = 'h3-markers' | 'screengrid'
+type GlyphType = 'bars' | 'rose'
 
 const LONDON_CENTER: [number, number] = [-0.1276, 51.5074]
 const BASEMAP_STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
 const EVCP_CURSOR_SVG = `<svg xmlns='http://www.w3.org/2000/svg' width='34' height='34' viewBox='0 0 34 34'><path fill='%23dc2626' d='M17 33s10-11.2 10-18A10 10 0 1 0 7 15c0 6.8 10 18 10 18Z'/><circle cx='17' cy='14.5' r='6.3' fill='%23fff'/><path fill='%230f172a' d='M18 10h-2.2l-.8 4h2.1l-.8 4 3.7-5h-2.1z'/></svg>`
 const EVCP_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(EVCP_CURSOR_SVG)}") 17 31, crosshair`
 const CHARGEPOINT_ICON_ID = 'chargepoint-marker'
+const SCREEN_GRID_GLYPH_LAYER_ID = 'mcda-screengrid-glyphs'
 const GLYPH_SIZE_MIN = 0.5
 const GLYPH_SIZE_MAX = 3.8
 const GLYPH_CONTRAST_MIN = 0
 const GLYPH_CONTRAST_MAX = 1
 // const CHARGEPOINT_ICON_URL = '/icons/chargepoint-marker.svg'
+
+const GLYPH_CRITERIA_LIMIT = 6
+
+const getGlyphMaxCriteria = (_glyphType: GlyphType) => GLYPH_CRITERIA_LIMIT
+
+const arraysEqual = (a: string[], b: string[]) => {
+  if (a.length !== b.length) return false
+  return a.every((value, index) => value === b[index])
+}
+
+const resolveGlyphCriterionIds = (
+  criteria: Criterion[],
+  selectedIds: string[],
+  glyphType: GlyphType
+) => {
+  const maxCriteria = getGlyphMaxCriteria(glyphType)
+  const activeCriteria = criteria.filter((criterion) => criterion.active)
+  const activeIds = new Set(activeCriteria.map((criterion) => criterion.id))
+  const resolved = selectedIds.filter((id, index) => activeIds.has(id) && selectedIds.indexOf(id) === index)
+  const selectedSet = new Set(resolved)
+
+  for (const criterion of activeCriteria.sort((a, b) => b.weight - a.weight)) {
+    if (resolved.length >= maxCriteria) break
+    if (!selectedSet.has(criterion.id)) {
+      resolved.push(criterion.id)
+      selectedSet.add(criterion.id)
+    }
+  }
+
+  return resolved.slice(0, maxCriteria)
+}
 
 type OverlayConfig =
   | {
@@ -240,12 +292,351 @@ const computeRankValues = (
   return ranks
 }
 
+const buildGlyphRows = (
+  mcdaResults: MapViewProps['mcdaResults'],
+  criteria: Criterion[],
+  glyphCriterionIds: string[],
+  glyphType: GlyphType,
+  glyphAggregation: 'auto' | 6 | 7 | 8 | 9 | 10,
+  glyphContrastMode: GlyphContrastMode,
+  glyphContrastStrength: number
+): { activeCriteria: Criterion[]; rows: GlyphRenderRow[] } => {
+  const activeCriteriaById = new Map(criteria.filter((criterion) => criterion.active).map((criterion) => [criterion.id, criterion]))
+  const activeCriteria = glyphCriterionIds
+    .map((id) => activeCriteriaById.get(id))
+    .filter((criterion): criterion is Criterion => Boolean(criterion))
+
+  if (activeCriteria.length === 0 || mcdaResults.length === 0) {
+    return { activeCriteria, rows: [] }
+  }
+
+  const grouped = new Map<string, {
+    scoreSum: number
+    count: number
+    criterionSums: Record<string, number>
+    rawSums: Record<string, number>
+  }>()
+
+  for (const row of mcdaResults) {
+    let targetCell = row.h3_cell
+    if (glyphAggregation !== 'auto') {
+      try {
+        const sourceRes = getResolution(row.h3_cell)
+        if (glyphAggregation < sourceRes) {
+          targetCell = cellToParent(row.h3_cell, glyphAggregation)
+        }
+      } catch {
+        continue
+      }
+    }
+
+    const existing = grouped.get(targetCell)
+    const target = existing ?? {
+      scoreSum: 0,
+      count: 0,
+      criterionSums: {},
+      rawSums: {},
+    }
+
+    target.scoreSum += row.mcda_score
+    target.count += 1
+    for (const criterion of activeCriteria) {
+      const value = row.criterion_values?.[criterion.id]
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        target.criterionSums[criterion.id] = (target.criterionSums[criterion.id] ?? 0) + value
+      }
+      const rawValue = row.raw_values?.[criterion.id]
+      if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
+        target.rawSums[criterion.id] = (target.rawSums[criterion.id] ?? 0) + rawValue
+      }
+    }
+
+    if (!existing) grouped.set(targetCell, target)
+  }
+
+  const aggregated = Array.from(grouped.entries()).map(([h3Cell, data]) => {
+    const criterionValues: Record<string, number> = {}
+    const rawValues: Record<string, number> = {}
+    for (const criterion of activeCriteria) {
+      const v = data.criterionSums[criterion.id]
+      if (typeof v === 'number') {
+        criterionValues[criterion.id] = v / data.count
+      }
+      const raw = data.rawSums[criterion.id]
+      if (typeof raw === 'number') {
+        rawValues[criterion.id] = raw / data.count
+      }
+    }
+
+    return {
+      h3Cell,
+      score: data.scoreSum / data.count,
+      criterionValues,
+      rawValues,
+    }
+  })
+
+  const rankValuesByCriterion = new Map<string, Map<string, number>>()
+  if (glyphContrastMode === 'rank' && glyphContrastStrength > 0) {
+    for (const criterion of activeCriteria) {
+      rankValuesByCriterion.set(criterion.id, computeRankValues(aggregated, criterion.id))
+    }
+  }
+
+  const rows: GlyphRenderRow[] = []
+  for (const row of aggregated) {
+    let lat = 0
+    let lng = 0
+    try {
+      ;[lat, lng] = getH3Center(row.h3Cell)
+    } catch {
+      continue
+    }
+
+    const displayValues: Record<string, number> = {}
+    for (const criterion of activeCriteria) {
+      const trueValue = clamp01(row.criterionValues[criterion.id] ?? 0)
+      const contrastValue =
+        glyphContrastMode === 'rank'
+          ? rankValuesByCriterion.get(criterion.id)?.get(row.h3Cell) ?? trueValue
+          : trueValue
+      displayValues[criterion.id] = clamp01(
+        trueValue * (1 - glyphContrastStrength) + contrastValue * glyphContrastStrength
+      )
+    }
+
+    rows.push({
+      ...row,
+      label: row.h3Cell,
+      displayValues,
+      lat,
+      lng,
+    })
+  }
+
+  return { activeCriteria, rows }
+}
+
+const createCostPattern = (ctx: CanvasRenderingContext2D) => {
+  const patternCanvas = document.createElement('canvas')
+  patternCanvas.width = 5
+  patternCanvas.height = 5
+  const patternCtx = patternCanvas.getContext('2d')
+  if (!patternCtx) return null
+
+  patternCtx.beginPath()
+  patternCtx.strokeStyle = 'black'
+  patternCtx.lineWidth = 1
+  patternCtx.moveTo(0, 5)
+  patternCtx.lineTo(5, 0)
+  patternCtx.stroke()
+
+  return ctx.createPattern(patternCanvas, 'repeat')
+}
+
+const drawCriterionGlyph = (
+  ctx: CanvasRenderingContext2D,
+  {
+    centerX,
+    centerY,
+    width,
+    height,
+    glyphType,
+    criteria,
+    values,
+    isSelected,
+  }: {
+    centerX: number
+    centerY: number
+    width: number
+    height: number
+    glyphType: 'bars' | 'rose'
+    criteria: Criterion[]
+    values: Record<string, number>
+    isSelected: boolean
+  }
+) => {
+  const costPattern = createCostPattern(ctx)
+
+  if (glyphType === 'rose') {
+    const outerRadiusMax = Math.min(width, height) * 0.45
+    const petals = criteria.length
+    const angleStep = (Math.PI * 2) / petals
+    const gapAngle = Math.min(angleStep * 0.12, (2 * Math.PI) / 180)
+    const maxWeight = Math.max(...criteria.map((criterion) => Math.abs(criterion.weight)), 0.001)
+
+    ctx.beginPath()
+    ctx.arc(centerX, centerY, outerRadiusMax, 0, Math.PI * 2)
+    ctx.strokeStyle = 'rgba(15,23,42,0.08)'
+    ctx.lineWidth = 1
+    ctx.stroke()
+
+    for (let i = 0; i < petals; i += 1) {
+      const criterion = criteria[i]
+      const value = clamp01(values[criterion.id] ?? 0)
+      const segmentStart = -Math.PI / 2 + i * angleStep
+      const segmentEnd = segmentStart + angleStep
+      const midAngle = (segmentStart + segmentEnd) / 2
+      const availableSweep = Math.max(0, angleStep - gapAngle * 2)
+      const weightNorm = Math.max(0.1, Math.min(1, Math.abs(criterion.weight) / maxWeight))
+      const sweep = Math.max(availableSweep * 0.18, availableSweep * weightNorm)
+      const startAngle = midAngle - sweep / 2
+      const endAngle = midAngle + sweep / 2
+      const radius = value * outerRadiusMax
+
+      ctx.beginPath()
+      ctx.moveTo(centerX, centerY)
+      ctx.arc(centerX, centerY, radius, startAngle, endAngle)
+      ctx.closePath()
+      ctx.fillStyle = criterion.color
+      ctx.globalAlpha = 0.8
+      ctx.fill()
+      ctx.globalAlpha = 1
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)'
+      ctx.lineWidth = 1
+      ctx.stroke()
+
+      if (criterion.polarity === 'cost' && costPattern) {
+        ctx.beginPath()
+        ctx.moveTo(centerX, centerY)
+        ctx.arc(centerX, centerY, radius, startAngle, endAngle)
+        ctx.closePath()
+        ctx.fillStyle = costPattern
+        ctx.globalAlpha = 0.22
+        ctx.fill()
+        ctx.globalAlpha = 1
+      }
+    }
+
+    if (isSelected) {
+      ctx.save()
+      ctx.beginPath()
+      ctx.arc(centerX, centerY, outerRadiusMax + 1.5, 0, Math.PI * 2)
+      ctx.strokeStyle = 'rgba(15,23,42,0.5)'
+      ctx.lineWidth = 1.2
+      ctx.stroke()
+      ctx.restore()
+    }
+
+    ctx.beginPath()
+    ctx.arc(centerX, centerY, 2, 0, Math.PI * 2)
+    ctx.fillStyle = 'rgba(15,23,42,0.55)'
+    ctx.fill()
+    return
+  }
+
+  const left = centerX - width / 2
+  const top = centerY - height / 2
+  const paddingX = 5
+  const paddingY = 4
+  const chartWidth = width - paddingX * 2
+  const chartHeight = height - paddingY * 2
+  const baseline = top + height - paddingY - 1
+  const gap = criteria.length > 4 ? 1 : 2
+  const barWidth = Math.max(1, Math.floor((chartWidth - (criteria.length - 1) * gap) / criteria.length))
+
+  criteria.forEach((criterion, index) => {
+    const clamped = clamp01(values[criterion.id] ?? 0)
+    const barHeight = Math.max(1, Math.round(clamped * (chartHeight - 2)))
+    const x = left + paddingX + index * (barWidth + gap)
+    const y = baseline - barHeight
+
+    ctx.fillStyle = criterion.color
+    ctx.shadowColor = 'rgba(255,255,255,0.65)'
+    ctx.shadowBlur = 1.5
+    ctx.fillRect(x, y, barWidth, barHeight)
+    ctx.shadowBlur = 0
+    ctx.strokeStyle = 'rgba(15,23,42,0.18)'
+    ctx.lineWidth = 1
+    ctx.strokeRect(x + 0.5, y + 0.5, Math.max(1, barWidth - 1), Math.max(1, barHeight - 1))
+
+    if (criterion.polarity === 'cost' && costPattern) {
+      ctx.fillStyle = costPattern
+      ctx.globalAlpha = 0.22
+      ctx.fillRect(x, y, barWidth, barHeight)
+      ctx.globalAlpha = 1
+    }
+  })
+
+  if (isSelected) {
+    ctx.save()
+    ctx.strokeStyle = 'rgba(15,23,42,0.55)'
+    ctx.lineWidth = 1.2
+    ctx.strokeRect(left + 1.5, top + 1.5, width - 3, height - 3)
+    ctx.restore()
+  }
+}
+
+const summarizeScreenGridCell = (
+  cellInfo: ScreenGridCellInfo,
+  criteria: Criterion[]
+): GlyphRenderRow | null => {
+  const rows = (cellInfo.cellData ?? [])
+    .map((item) => item.data)
+    .filter((row): row is GlyphRenderRow => Boolean(row))
+
+  if (rows.length === 0) return null
+  if (rows.length === 1) return rows[0]
+
+  const criterionValues: Record<string, number> = {}
+  const rawValues: Record<string, number> = {}
+  const displayValues: Record<string, number> = {}
+  for (const criterion of criteria) {
+    let criterionSum = 0
+    let rawSum = 0
+    let displaySum = 0
+    let criterionCount = 0
+    let rawCount = 0
+    let displayCount = 0
+
+    for (const row of rows) {
+      const criterionValue = row.criterionValues[criterion.id]
+      if (typeof criterionValue === 'number' && Number.isFinite(criterionValue)) {
+        criterionSum += criterionValue
+        criterionCount += 1
+      }
+      const rawValue = row.rawValues[criterion.id]
+      if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
+        rawSum += rawValue
+        rawCount += 1
+      }
+      const displayValue = row.displayValues[criterion.id]
+      if (typeof displayValue === 'number' && Number.isFinite(displayValue)) {
+        displaySum += displayValue
+        displayCount += 1
+      }
+    }
+
+    if (criterionCount > 0) criterionValues[criterion.id] = criterionSum / criterionCount
+    if (rawCount > 0) rawValues[criterion.id] = rawSum / rawCount
+    if (displayCount > 0) displayValues[criterion.id] = displaySum / displayCount
+  }
+
+  const score = rows.reduce((sum, row) => sum + row.score, 0) / rows.length
+  const lat = rows.reduce((sum, row) => sum + row.lat, 0) / rows.length
+  const lng = rows.reduce((sum, row) => sum + row.lng, 0) / rows.length
+
+  return {
+    h3Cell: `screen-grid:${cellInfo.index ?? 'cell'}`,
+    label: `${rows.length} H3 cells`,
+    score,
+    criterionValues,
+    rawValues,
+    displayValues,
+    lat,
+    lng,
+  }
+}
+
 export function MapView({ mcdaResults }: MapViewProps) {
   const mapContainer = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const tooltipRef = useRef<maplibregl.Popup | null>(null)
   const glyphTooltipActiveRef = useRef(false)
   const glyphMarkersRef = useRef<maplibregl.Marker[]>([])
+  const screengridLayerRef = useRef<ScreenGridLayerGL<GlyphRenderRow> | null>(null)
+  const previousCriterionWeightsRef = useRef<Record<string, number>>({})
   const latestPlacementsRef = useRef<EVCPPlacement[]>([])
   const mcdaResultsRef = useRef(mcdaResults)
   const isSimulationModeRef = useRef(false)
@@ -256,8 +647,11 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const [showGlyphLayer, setShowGlyphLayer] = useState(false)
   const [showTooltips, setShowTooltips] = useState(false)
   const [showLayerPanel, setShowLayerPanel] = useState(true)
+  const [showGlyphLegend, setShowGlyphLegend] = useState(true)
   const [isMapFullscreen, setIsMapFullscreen] = useState(false)
-  const [glyphType, setGlyphType] = useState<'bars' | 'rose'>('bars')
+  const [glyphType, setGlyphType] = useState<GlyphType>('bars')
+  const [glyphRenderer, setGlyphRenderer] = useState<GlyphRenderer>('screengrid')
+  const [glyphCriterionIds, setGlyphCriterionIds] = useState<string[]>([])
   const [glyphAggregation, setGlyphAggregation] = useState<'auto' | 6 | 7 | 8 | 9 | 10>(7)
   const [glyphSizeScale, setGlyphSizeScale] = useState(1)
   const [glyphContrastMode, setGlyphContrastMode] = useState<GlyphContrastMode>('rank')
@@ -286,13 +680,94 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const visibleScenarioIds = useScenarioStore((s) => s.visibleScenarioIds)
   const comparedScenarioIds = useScenarioStore((s) => s.comparedScenarioIds)
 
+  const resolvedGlyphCriterionIds = useMemo(
+    () => resolveGlyphCriterionIds(criteria, glyphCriterionIds, glyphType),
+    [criteria, glyphCriterionIds, glyphType]
+  )
+
+  const activeGlyphCriteria = useMemo(
+    () => criteria.filter((criterion) => criterion.active).sort((a, b) => b.weight - a.weight),
+    [criteria]
+  )
+
+  const glyphData = useMemo(
+    () =>
+      buildGlyphRows(
+        mcdaResults,
+        criteria,
+        resolvedGlyphCriterionIds,
+        glyphType,
+        glyphAggregation,
+        glyphContrastMode,
+        glyphContrastStrength
+      ),
+    [mcdaResults, criteria, resolvedGlyphCriterionIds, glyphType, glyphAggregation, glyphContrastMode, glyphContrastStrength]
+  )
+
   const glyphLegendCriteria = useMemo(() => {
-    const maxItems = glyphType === 'rose' ? 8 : 6
-    return criteria
-      .filter((c) => c.active)
-      .sort((a, b) => b.weight - a.weight)
-      .slice(0, maxItems)
+    return glyphData.activeCriteria
+  }, [glyphData.activeCriteria])
+
+  useEffect(() => {
+    setGlyphCriterionIds((previous) => {
+      const next = resolveGlyphCriterionIds(criteria, previous, glyphType)
+      return arraysEqual(previous, next) ? previous : next
+    })
   }, [criteria, glyphType])
+
+  useEffect(() => {
+    const previousWeights = previousCriterionWeightsRef.current
+    const changedActiveCriteria = criteria.filter(
+      (criterion) =>
+        criterion.active &&
+        previousWeights[criterion.id] !== undefined &&
+        previousWeights[criterion.id] !== criterion.weight
+    )
+
+    if (changedActiveCriteria.length > 0) {
+      const changedCriterion = changedActiveCriteria[changedActiveCriteria.length - 1]
+      setGlyphCriterionIds((previous) => {
+        const current = resolveGlyphCriterionIds(criteria, previous, glyphType)
+        if (current.includes(changedCriterion.id)) {
+          return arraysEqual(previous, current) ? previous : current
+        }
+
+        const maxCriteria = getGlyphMaxCriteria(glyphType)
+        const next = current.filter((id) => id !== changedCriterion.id)
+        if (next.length >= maxCriteria) {
+          next[maxCriteria - 1] = changedCriterion.id
+        } else {
+          next.push(changedCriterion.id)
+        }
+
+        return arraysEqual(previous, next) ? previous : next
+      })
+    }
+
+    previousCriterionWeightsRef.current = Object.fromEntries(
+      criteria.map((criterion) => [criterion.id, criterion.weight])
+    )
+  }, [criteria, glyphType])
+
+  const replaceGlyphCriterion = useCallback(
+    (slotIndex: number, nextCriterionId: string) => {
+      setGlyphCriterionIds((previous) => {
+        const current = resolveGlyphCriterionIds(criteria, previous, glyphType)
+        const nextCriterion = criteria.find((criterion) => criterion.id === nextCriterionId && criterion.active)
+        if (!nextCriterion || slotIndex < 0 || slotIndex >= current.length) return current
+
+        const next = [...current]
+        const existingIndex = next.indexOf(nextCriterionId)
+        if (existingIndex >= 0 && existingIndex !== slotIndex) {
+          next[existingIndex] = next[slotIndex]
+        }
+        next[slotIndex] = nextCriterionId
+
+        return arraysEqual(previous, next) ? previous : next
+      })
+    },
+    [criteria, glyphType]
+  )
 
   const getTooltipPopup = useCallback(() => {
     if (!tooltipRef.current) {
@@ -385,7 +860,8 @@ export function MapView({ mcdaResults }: MapViewProps) {
       h3Cell: string,
       score: number,
       rawValues?: Record<string, number>,
-      comparison?: { h3Cell: string; score: number; rawValues?: Record<string, number> }
+      comparison?: { h3Cell: string; label?: string; score: number; rawValues?: Record<string, number> },
+      label?: string
     ) => {
       const activeCriteria = criteria
         .filter((c) => c.active)
@@ -434,13 +910,13 @@ export function MapView({ mcdaResults }: MapViewProps) {
       if (comparison && comparison.h3Cell !== h3Cell) {
         return `
           <div style="display:flex;align-items:flex-start;gap:0;max-width:520px;">
-            ${buildPanel('Selected', comparison.h3Cell, comparison.score, comparison.rawValues)}
+            ${buildPanel('Selected', comparison.label ?? comparison.h3Cell, comparison.score, comparison.rawValues)}
             <div style="width:1px;align-self:stretch;background:rgba(148,163,184,0.3);"></div>
-            ${buildPanel('Hovered', h3Cell, score, rawValues)}
+            ${buildPanel('Hovered', label ?? h3Cell, score, rawValues)}
           </div>`
       }
 
-      return buildPanel('Area', h3Cell, score, rawValues)
+      return buildPanel('Area', label ?? h3Cell, score, rawValues)
     },
     [criteria, formatTooltipNumber]
   )
@@ -452,6 +928,15 @@ export function MapView({ mcdaResults }: MapViewProps) {
       marker.remove()
     }
     glyphMarkersRef.current = []
+  }, [])
+
+  const clearScreenGridGlyphLayer = useCallback(() => {
+    const map = mapRef.current
+    const layer = screengridLayerRef.current
+    if (map && layer && map.getLayer(layer.id)) {
+      map.removeLayer(layer.id)
+    }
+    screengridLayerRef.current = null
   }, [])
 
   const applyLayerVisibility = useCallback((map: maplibregl.Map) => {
@@ -820,6 +1305,12 @@ export function MapView({ mcdaResults }: MapViewProps) {
   }, [showGlyphLayer])
 
   useEffect(() => {
+    setComparisonGlyph(null)
+    glyphTooltipActiveRef.current = false
+    tooltipRef.current?.remove()
+  }, [glyphRenderer])
+
+  useEffect(() => {
     const map = mapRef.current
     if (!map) return
 
@@ -852,6 +1343,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
       tooltipRef.current?.remove()
       tooltipRef.current = null
       clearGlyphMarkers()
+      clearScreenGridGlyphLayer()
       mapRef.current?.remove()
       mapRef.current = null
       if (pmtilesProtocolRef.current) {
@@ -859,7 +1351,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
         pmtilesProtocolRef.current = null
       }
     }
-  }, [initMap, clearGlyphMarkers])
+  }, [initMap, clearGlyphMarkers, clearScreenGridGlyphLayer])
 
   // Hover tooltip on polygon layer showing raw criterion values.
   useEffect(() => {
@@ -1014,140 +1506,23 @@ export function MapView({ mcdaResults }: MapViewProps) {
     applyLayerVisibility(map)
   }, [applyLayerVisibility])
 
-  // Draw a glyph layer with criterion-level bars or rose petals as canvas markers.
+  // Draw a glyph layer with criterion-level bars or rose petals as H3 canvas markers.
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
 
     clearGlyphMarkers()
-    if (!showGlyphLayer || mcdaResults.length === 0) return
-
-    const maxCriteria = glyphType === 'rose' ? 8 : 6
-    const activeCriteria = criteria
-      .filter((c) => c.active)
-      .sort((a, b) => b.weight - a.weight)
-      .slice(0, maxCriteria)
-    if (activeCriteria.length === 0) return
-
-    const grouped = new Map<string, {
-      scoreSum: number
-      count: number
-      criterionSums: Record<string, number>
-      rawSums: Record<string, number>
-    }>()
-    for (const row of mcdaResults) {
-      let targetCell = row.h3_cell
-      if (glyphAggregation !== 'auto') {
-        try {
-          const sourceRes = getResolution(row.h3_cell)
-          if (glyphAggregation < sourceRes) {
-            targetCell = cellToParent(row.h3_cell, glyphAggregation)
-          }
-        } catch {
-          continue
-        }
-      }
-
-      const existing = grouped.get(targetCell)
-      if (existing) {
-        existing.scoreSum += row.mcda_score
-        existing.count += 1
-        for (const criterion of activeCriteria) {
-          const value = row.criterion_values?.[criterion.id]
-          if (typeof value === 'number' && Number.isFinite(value)) {
-            existing.criterionSums[criterion.id] = (existing.criterionSums[criterion.id] ?? 0) + value
-          }
-          const rawValue = row.raw_values?.[criterion.id]
-          if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
-            existing.rawSums[criterion.id] = (existing.rawSums[criterion.id] ?? 0) + rawValue
-          }
-        }
-      } else {
-        const criterionSums: Record<string, number> = {}
-        const rawSums: Record<string, number> = {}
-        for (const criterion of activeCriteria) {
-          const value = row.criterion_values?.[criterion.id]
-          if (typeof value === 'number' && Number.isFinite(value)) {
-            criterionSums[criterion.id] = value
-          }
-          const rawValue = row.raw_values?.[criterion.id]
-          if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
-            rawSums[criterion.id] = rawValue
-          }
-        }
-        grouped.set(targetCell, {
-          scoreSum: row.mcda_score,
-          count: 1,
-          criterionSums,
-          rawSums,
-        })
-      }
-    }
-
-    const aggregated = Array.from(grouped.entries()).map(([h3Cell, data]) => {
-      const criterionValues: Record<string, number> = {}
-      const rawValues: Record<string, number> = {}
-      for (const criterion of activeCriteria) {
-        const v = data.criterionSums[criterion.id]
-        if (typeof v === 'number') {
-          criterionValues[criterion.id] = v / data.count
-        }
-        const raw = data.rawSums[criterion.id]
-        if (typeof raw === 'number') {
-          rawValues[criterion.id] = raw / data.count
-        }
-      }
-
-      return {
-        h3Cell,
-        score: data.scoreSum / data.count,
-        criterionValues,
-        rawValues,
-      }
-    })
-
-    const rankValuesByCriterion = new Map<string, Map<string, number>>()
-    if (glyphContrastMode === 'rank' && glyphContrastStrength > 0) {
-      for (const criterion of activeCriteria) {
-        rankValuesByCriterion.set(criterion.id, computeRankValues(aggregated, criterion.id))
-      }
-    }
-
-    const displayRows = aggregated.map((row) => {
-      const displayValues: Record<string, number> = {}
-      for (const criterion of activeCriteria) {
-        const trueValue = clamp01(row.criterionValues[criterion.id] ?? 0)
-        const contrastValue =
-          glyphContrastMode === 'rank'
-            ? rankValuesByCriterion.get(criterion.id)?.get(row.h3Cell) ?? trueValue
-            : trueValue
-        displayValues[criterion.id] = clamp01(
-          trueValue * (1 - glyphContrastStrength) + contrastValue * glyphContrastStrength
-        )
-      }
-      return {
-        ...row,
-        displayValues,
-      }
-    })
+    if (!showGlyphLayer || glyphRenderer !== 'h3-markers' || glyphData.rows.length === 0) return
 
     const selectedGlyph = comparisonGlyph
-      ? displayRows.find((row) => row.h3Cell === comparisonGlyph.h3Cell) ?? null
+      ? glyphData.rows.find((row) => row.h3Cell === comparisonGlyph.h3Cell) ?? null
       : null
 
     if (comparisonGlyph && !selectedGlyph) {
       setComparisonGlyph(null)
     }
 
-    for (const row of displayRows) {
-      let lat = 0
-      let lng = 0
-      try {
-        ;[lat, lng] = getH3Center(row.h3Cell)
-      } catch {
-        continue
-      }
-
+    for (const row of glyphData.rows) {
       const baseHeight = glyphType === 'rose' ? 42 : 34
       const markerHeight = Math.round(baseHeight * glyphSizeScale)
       const markerWidth = glyphType === 'rose' ? markerHeight : Math.round(markerHeight * 1.25)
@@ -1165,135 +1540,16 @@ export function MapView({ mcdaResults }: MapViewProps) {
       if (!ctx) continue
       ctx.scale(dpr, dpr)
 
-      const patternCanvas = document.createElement('canvas')
-      patternCanvas.width = 5
-      patternCanvas.height = 5
-      const patternCtx = patternCanvas.getContext('2d')
-      if (patternCtx) {
-        patternCtx.beginPath()
-        patternCtx.strokeStyle = 'black'
-        patternCtx.lineWidth = 1
-        patternCtx.moveTo(0, 5)
-        patternCtx.lineTo(5, 0)
-        patternCtx.stroke()
-      }
-      const costPattern = ctx.createPattern(patternCanvas, 'repeat')
-
-      if (glyphType === 'rose') {
-        const centerX = markerWidth / 2
-        const centerY = markerHeight / 2
-        const innerRadius = 0
-        const outerRadiusMax = markerWidth * 0.45
-        const petals = activeCriteria.length
-        const angleStep = (Math.PI * 2) / petals
-        const gapAngle = Math.min(angleStep * 0.12, (2 * Math.PI) / 180)
-        const maxWeight = Math.max(
-          ...activeCriteria.map((criterion) => Math.abs(criterion.weight)),
-          0.001
-        )
-
-        ctx.beginPath()
-        ctx.arc(centerX, centerY, outerRadiusMax, 0, Math.PI * 2)
-        ctx.strokeStyle = 'rgba(15,23,42,0.08)'
-        ctx.lineWidth = 1
-        ctx.stroke()
-
-        for (let i = 0; i < petals; i += 1) {
-          const criterion = activeCriteria[i]
-          const raw = row.displayValues[criterion.id] ?? 0
-          const value = Math.max(0, Math.min(1, raw))
-          const segmentStart = -Math.PI / 2 + i * angleStep
-          const segmentEnd = segmentStart + angleStep
-          const midAngle = (segmentStart + segmentEnd) / 2
-          const availableSweep = Math.max(0, angleStep - gapAngle * 2)
-          const weightNorm = Math.max(0.1, Math.min(1, Math.abs(criterion.weight) / maxWeight))
-          const sweep = Math.max(availableSweep * 0.18, availableSweep * weightNorm)
-          const startAngle = midAngle - sweep / 2
-          const endAngle = midAngle + sweep / 2
-          const radius = innerRadius + value * (outerRadiusMax - innerRadius)
-
-          ctx.beginPath()
-          ctx.moveTo(centerX, centerY)
-          ctx.arc(centerX, centerY, radius, startAngle, endAngle)
-          ctx.closePath()
-          ctx.fillStyle = criterion.color
-          ctx.globalAlpha = 0.8
-          ctx.fill()
-          ctx.globalAlpha = 1
-
-          ctx.strokeStyle = 'rgba(255,255,255,0.85)'
-          ctx.lineWidth = 1
-          ctx.stroke()
-
-          if (criterion.polarity === 'cost' && costPattern) {
-            ctx.beginPath()
-            ctx.moveTo(centerX, centerY)
-            ctx.arc(centerX, centerY, radius, startAngle, endAngle)
-            ctx.closePath()
-            ctx.fillStyle = costPattern
-            ctx.globalAlpha = 0.22
-            ctx.fill()
-            ctx.globalAlpha = 1
-          }
-        }
-
-        if (isSelectedGlyph) {
-          ctx.save()
-          ctx.beginPath()
-          ctx.arc(centerX, centerY, outerRadiusMax + 1.5, 0, Math.PI * 2)
-          ctx.strokeStyle = 'rgba(15,23,42,0.5)'
-          ctx.lineWidth = 1.2
-          ctx.stroke()
-          ctx.restore()
-        }
-
-        ctx.beginPath()
-        ctx.arc(centerX, centerY, 2, 0, Math.PI * 2)
-        ctx.fillStyle = 'rgba(15,23,42,0.55)'
-        ctx.fill()
-      } else {
-        const paddingX = 5
-        const paddingY = 4
-        const chartWidth = markerWidth - paddingX * 2
-        const chartHeight = markerHeight - paddingY * 2
-        const baseline = markerHeight - paddingY - 1
-
-        const bars = activeCriteria.length
-        const gap = bars > 4 ? 1 : 2
-        const barWidth = Math.max(1, Math.floor((chartWidth - (bars - 1) * gap) / bars))
-
-        activeCriteria.forEach((criterion, index) => {
-          const raw = row.displayValues[criterion.id] ?? 0
-          const clamped = Math.max(0, Math.min(1, raw))
-          const barHeight = Math.max(1, Math.round(clamped * (chartHeight - 2)))
-          const x = paddingX + index * (barWidth + gap)
-          const y = baseline - barHeight
-
-          ctx.fillStyle = criterion.color
-          ctx.shadowColor = 'rgba(255,255,255,0.65)'
-          ctx.shadowBlur = 1.5
-          ctx.fillRect(x, y, barWidth, barHeight)
-          ctx.shadowBlur = 0
-          ctx.strokeStyle = 'rgba(15,23,42,0.18)'
-          ctx.lineWidth = 1
-          ctx.strokeRect(x + 0.5, y + 0.5, Math.max(1, barWidth - 1), Math.max(1, barHeight - 1))
-
-          if (criterion.polarity === 'cost' && costPattern) {
-            ctx.fillStyle = costPattern
-            ctx.globalAlpha = 0.22
-            ctx.fillRect(x, y, barWidth, barHeight)
-            ctx.globalAlpha = 1
-          }
-        })
-
-        if (isSelectedGlyph) {
-          ctx.save()
-          ctx.strokeStyle = 'rgba(15,23,42,0.55)'
-          ctx.lineWidth = 1.2
-          ctx.strokeRect(1.5, 1.5, markerWidth - 3, markerHeight - 3)
-          ctx.restore()
-        }
-      }
+      drawCriterionGlyph(ctx, {
+        centerX: markerWidth / 2,
+        centerY: markerHeight / 2,
+        width: markerWidth,
+        height: markerHeight,
+        glyphType,
+        criteria: glyphData.activeCriteria,
+        values: row.displayValues,
+        isSelected: isSelectedGlyph,
+      })
 
       const markerElement = document.createElement('div')
       markerElement.style.pointerEvents = 'auto'
@@ -1309,11 +1565,12 @@ export function MapView({ mcdaResults }: MapViewProps) {
 
         const nextGlyph: GlyphDatum = {
           h3Cell: row.h3Cell,
+          label: row.label,
           score: row.score,
           criterionValues: row.criterionValues,
           rawValues: row.rawValues,
-          lat,
-          lng,
+          lat: row.lat,
+          lng: row.lng,
         }
 
         if (comparisonGlyph?.h3Cell === row.h3Cell) {
@@ -1328,8 +1585,8 @@ export function MapView({ mcdaResults }: MapViewProps) {
 
         glyphTooltipActiveRef.current = true
         popup
-          .setLngLat([lng, lat])
-          .setHTML(buildTooltipHtml(row.h3Cell, row.score, row.rawValues))
+          .setLngLat([row.lng, row.lat])
+          .setHTML(buildTooltipHtml(row.h3Cell, row.score, row.rawValues, undefined, row.label))
           .addTo(map)
       })
 
@@ -1337,7 +1594,7 @@ export function MapView({ mcdaResults }: MapViewProps) {
         if (!showTooltips) return
         glyphTooltipActiveRef.current = true
         popup
-          .setLngLat([lng, lat])
+          .setLngLat([row.lng, row.lat])
           .setHTML(
             buildTooltipHtml(
               row.h3Cell,
@@ -1346,10 +1603,12 @@ export function MapView({ mcdaResults }: MapViewProps) {
               comparisonGlyph
                 ? {
                   h3Cell: comparisonGlyph.h3Cell,
+                  label: comparisonGlyph.label,
                   score: comparisonGlyph.score,
                   rawValues: comparisonGlyph.rawValues,
                 }
-                : undefined
+                : undefined,
+              row.label
             )
           )
           .addTo(map)
@@ -1361,11 +1620,135 @@ export function MapView({ mcdaResults }: MapViewProps) {
       })
 
       const marker = new maplibregl.Marker({ element: markerElement, anchor: 'center' })
-        .setLngLat([lng, lat])
+        .setLngLat([row.lng, row.lat])
         .addTo(map)
       glyphMarkersRef.current.push(marker)
     }
-  }, [mcdaResults, criteria, showGlyphLayer, showTooltips, glyphAggregation, glyphType, glyphSizeScale, glyphContrastMode, glyphContrastStrength, comparisonGlyph, clearGlyphMarkers, buildTooltipHtml, getTooltipPopup])
+  }, [glyphData, showGlyphLayer, showTooltips, glyphRenderer, glyphType, glyphSizeScale, comparisonGlyph, clearGlyphMarkers, buildTooltipHtml, getTooltipPopup])
+
+  // Draw an alternative screen-space glyph layer with screengrid.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !isMapReady) return
+
+    clearScreenGridGlyphLayer()
+    if (!showGlyphLayer || glyphRenderer !== 'screengrid' || glyphData.rows.length === 0) return
+
+    const popup = getTooltipPopup()
+    const cellSize = Math.max(24, Math.round((glyphType === 'rose' ? 52 : 46) * glyphSizeScale))
+
+    const layer = new ScreenGridLayerGL({
+      id: SCREEN_GRID_GLYPH_LAYER_ID,
+      data: glyphData.rows,
+      getPosition: (row: GlyphRenderRow) => [row.lng, row.lat],
+      getWeight: (row: GlyphRenderRow) => Math.max(0.001, row.score),
+      cellSizePixels: cellSize,
+      glyphSize: 0.82,
+      showBackground: false,
+      enableGlyphs: true,
+      aggregationFunction: 'mean',
+      normalizationFunction: 'max-local',
+      colorScale: () => [0, 0, 0, 0],
+      onDrawCell: (
+        ctx: CanvasRenderingContext2D,
+        x: number,
+        y: number,
+        _normVal: number,
+        cellInfo: ScreenGridCellInfo
+      ) => {
+        const row = summarizeScreenGridCell(cellInfo, glyphData.activeCriteria)
+        if (!row) return
+
+        const glyphHeight = Math.max(18, (cellInfo.glyphRadius ?? cellSize * 0.36) * 2)
+        const glyphWidth = glyphType === 'rose' ? glyphHeight : glyphHeight * 1.25
+        drawCriterionGlyph(ctx, {
+          centerX: x,
+          centerY: y,
+          width: glyphWidth,
+          height: glyphHeight,
+          glyphType,
+          criteria: glyphData.activeCriteria,
+          values: row.displayValues,
+          isSelected: comparisonGlyph?.h3Cell === row.h3Cell,
+        })
+      },
+      onHover: ({ cell }: { cell: ScreenGridCellInfo }) => {
+        const row = summarizeScreenGridCell(cell, glyphData.activeCriteria)
+        if (!row || !showTooltips) return
+
+        glyphTooltipActiveRef.current = true
+        popup
+          .setLngLat([row.lng, row.lat])
+          .setHTML(
+            buildTooltipHtml(
+              row.h3Cell,
+              row.score,
+              row.rawValues,
+              comparisonGlyph
+                ? {
+                  h3Cell: comparisonGlyph.h3Cell,
+                  label: comparisonGlyph.label,
+                  score: comparisonGlyph.score,
+                  rawValues: comparisonGlyph.rawValues,
+                }
+                : undefined,
+              row.label
+            )
+          )
+          .addTo(map)
+      },
+      onClick: ({ cell }: { cell: ScreenGridCellInfo }) => {
+        const row = summarizeScreenGridCell(cell, glyphData.activeCriteria)
+        if (!row) return
+
+        if (comparisonGlyph?.h3Cell === row.h3Cell) {
+          setComparisonGlyph(null)
+          glyphTooltipActiveRef.current = false
+          popup.remove()
+          return
+        }
+
+        setComparisonGlyph(row)
+        if (!showTooltips) return
+
+        glyphTooltipActiveRef.current = true
+        popup
+          .setLngLat([row.lng, row.lat])
+          .setHTML(buildTooltipHtml(row.h3Cell, row.score, row.rawValues, undefined, row.label))
+          .addTo(map)
+      },
+    })
+
+    map.addLayer(layer as unknown as maplibregl.CustomLayerInterface)
+    screengridLayerRef.current = layer
+
+    const onMouseMove = (event: maplibregl.MapMouseEvent) => {
+      if (!showTooltips) return
+      const activeLayer = screengridLayerRef.current
+      if (!activeLayer?.getCellAt({ x: event.point.x, y: event.point.y })) {
+        glyphTooltipActiveRef.current = false
+        popup.remove()
+      }
+    }
+
+    map.on('mousemove', onMouseMove)
+    return () => {
+      map.off('mousemove', onMouseMove)
+      clearScreenGridGlyphLayer()
+    }
+  }, [
+    glyphData,
+    showGlyphLayer,
+    showTooltips,
+    glyphRenderer,
+    glyphType,
+    glyphSizeScale,
+    comparisonGlyph,
+    isMapReady,
+    clearScreenGridGlyphLayer,
+    buildTooltipHtml,
+    getTooltipPopup,
+  ])
 
   const syncEvcpMarkers = useCallback((placements: typeof currentPlacements) => {
     const map = mapRef.current
@@ -1601,6 +1984,19 @@ export function MapView({ mcdaResults }: MapViewProps) {
             </div>
 
             <div className="mt-2">
+              <div className="text-[10px] text-slate-500 mb-1">Glyph renderer</div>
+              <select
+                value={glyphRenderer}
+                onChange={(e) => setGlyphRenderer(e.target.value as GlyphRenderer)}
+                className="w-full text-xs rounded-md border border-slate-300 bg-white px-2 py-1"
+                disabled={!showGlyphLayer}
+              >
+                <option value="h3-markers">H3 markers</option>
+                <option value="screengrid">ScreenGrid</option>
+              </select>
+            </div>
+
+            <div className="mt-2">
               <div className="text-[10px] text-slate-500 mb-1">Glyph type</div>
               <select
                 value={glyphType}
@@ -1715,40 +2111,81 @@ export function MapView({ mcdaResults }: MapViewProps) {
 
       {/* Glyph Legend */}
       {showGlyphLayer && glyphLegendCriteria.length > 0 && (
-        <div className="absolute bottom-8 left-4 bg-white/90 backdrop-blur-sm rounded-lg shadow-lg p-3 border border-slate-200 max-w-[270px] z-10">
-          <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
-            Glyph Legend
-          </div>
-          <div className="text-[10px] text-slate-600 mb-2">
-            {glyphType === 'rose'
-              ? 'Petal length shows criterion score; petal width follows criterion weight.'
-              : 'Bar height shows criterion score.'}
-            {glyphContrastMode === 'rank' && glyphContrastStrength > 0
-              ? ` Display is blended ${Math.round(glyphContrastStrength * 100)}% toward per-criterion rank.`
-              : ''}
-          </div>
-          <div className="flex flex-col gap-1.5">
-            {glyphLegendCriteria.map((criterion) => (
-              <div key={criterion.id} className="flex items-center justify-between gap-2 text-[10px]">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span
-                    className="w-3 h-3 rounded-[2px] border border-slate-300"
-                    style={{ backgroundColor: criterion.color }}
-                  />
-                  <span className="truncate text-slate-700">{criterion.name}</span>
-                </div>
-                <div className="flex items-center gap-1.5 text-slate-500">
-                  {criterion.polarity === 'cost' && (
-                    <span className="inline-flex items-center px-1.5 py-0.5 rounded border border-slate-300 text-[9px]">
-                      hatched
-                    </span>
-                  )}
-                  <span className="font-mono">w:{criterion.weight.toFixed(2)}</span>
-                </div>
+        showGlyphLegend ? (
+          <div className="absolute bottom-8 left-4 bg-white/90 backdrop-blur-sm rounded-lg shadow-lg p-3 border border-slate-200 max-w-[270px] z-10">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                Glyph Legend
               </div>
-            ))}
+              <button
+                type="button"
+                onClick={() => setShowGlyphLegend(false)}
+                className="inline-flex h-6 w-6 flex-none items-center justify-center rounded-md border border-slate-200 bg-white/90 text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+                aria-label="Hide glyph legend"
+                title="Hide glyph legend"
+              >
+                <Minimize2 className="h-3.5 w-3.5" strokeWidth={2.4} />
+              </button>
+            </div>
+            <div className="text-[10px] text-slate-600 mb-2">
+              {glyphType === 'rose'
+                ? 'Petal length shows criterion score; petal width follows criterion weight.'
+                : 'Bar height shows criterion score.'}
+              {glyphContrastMode === 'rank' && glyphContrastStrength > 0
+                ? ` Display is blended ${Math.round(glyphContrastStrength * 100)}% toward per-criterion rank.`
+                : ''}
+            </div>
+            <div className="flex flex-col gap-1.5">
+              {glyphLegendCriteria.map((criterion, index) => {
+                const criterionOptions = activeGlyphCriteria.filter(
+                  (option) => option.id === criterion.id || !resolvedGlyphCriterionIds.includes(option.id)
+                )
+
+                return (
+                <div key={`${index}-${criterion.id}`} className="flex items-center justify-between gap-2 text-[10px]">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className="w-3 h-3 rounded-[2px] border border-slate-300"
+                      style={{ backgroundColor: criterion.color }}
+                    />
+                    <select
+                      value={criterion.id}
+                      onChange={(e) => replaceGlyphCriterion(index, e.target.value)}
+                      className="min-w-0 max-w-[132px] truncate rounded border border-transparent bg-transparent px-1 py-0.5 text-[10px] text-slate-700 outline-none hover:border-slate-200 hover:bg-white focus:border-slate-300 focus:bg-white"
+                      aria-label={`Glyph criterion ${index + 1}`}
+                      title="Swap glyph criterion"
+                    >
+                      {criterionOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-slate-500">
+                    {criterion.polarity === 'cost' && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded border border-slate-300 text-[9px]">
+                        hatched
+                      </span>
+                    )}
+                    <span className="font-mono">w:{criterion.weight.toFixed(2)}</span>
+                  </div>
+                </div>
+                )
+              })}
+            </div>
           </div>
-        </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowGlyphLegend(true)}
+            className="absolute bottom-8 left-4 z-10 inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-slate-600 shadow-lg backdrop-blur-sm transition-colors hover:bg-slate-50 hover:text-slate-800"
+            aria-label="Show glyph legend"
+            title="Show glyph legend"
+          >
+            <Maximize2 className="h-3.5 w-3.5" strokeWidth={2.4} />
+          </button>
+        )
       )}
 
       {/* Color Legend */}
