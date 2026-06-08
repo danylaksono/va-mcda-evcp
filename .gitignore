@@ -4,4 +4,4 @@ dist
 .env
 .env.*
 !.env.example
-./paper_materials/
+# ./paper_materials/

@@ -167,3 +167,51 @@ Interactions propagate across views through a shared reactive store:
 \end{itemize}
 
 \noindent This architecture supports \emph{loose coupling}: each panel subscribes only to the state slices it needs, minimising unnecessary re-renders during high-frequency interactions such as weight dragging.
+
+%--------------------------------------------------------------
+\subsection{Interaction Design}
+\label{sec:roth}
+
+The platform's interaction richness can be assessed through Roth's~\cite{roth2013taxonomy} empirically-derived taxonomy of interaction primitives for interactive cartography, which distinguishes \emph{objective primitives} (what the user aims to accomplish) from \emph{operator primitives} (the mechanisms the system provides). Table~\ref{tab:roth-summary} maps the platform's features to Roth's five objectives---ordered by increasing cognitive sophistication---and sixteen of his seventeen operators (all except \emph{reproject}). The platform supports the full objective progression within a single session, from low-level \emph{identify} (reading cell values) through \emph{rank} and \emph{compare} (choropleth inspection, glyph pinning, method switching) to higher-level \emph{associate} (linking placements to impact KPIs and DFES projections) and \emph{delineate} (identifying spatial clusters and temporal sufficiency regions). This mirrors the typical planning workflow and aligns with Roth's broader user goals of \emph{procure}, \emph{predict}, and \emph{prescribe}. A distinguishing characteristic is the centrality of the \emph{calculate} operator: whereas in conventional interactive maps \emph{calculate} is limited to simple derived measures~\cite{roth2013taxonomy}, here it is the most frequently invoked operator---every weight adjustment triggers MCDA rescoring across 118,000 cells, every placement triggers impact estimation, and every scope change triggers DFES conversion---sustained at interactive latency by the client-side DuckDB-WASM engine. The platform also spans all three of Roth's operand classes (\emph{space-alone}, \emph{attributes-in-space}, and \emph{space-in-time}), a breadth that is uncommon in MCDA-based siting tools and reflects the integration of spatial, analytical, and temporal reasoning within a single coordinated environment~\cite{keim2008visual}.
+
+\begin{table}[htbp]
+\centering
+\caption{Platform coverage of Roth's~\cite{roth2013taxonomy} interaction taxonomy. \textbf{Objectives} (top) list the cognitive task and its primary platform support. \textbf{Operators} (bottom) list each primitive and its implementation; \ding{51} = supported, -- = not applicable.}
+\label{tab:roth-summary}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}lp{5.8cm}@{}}
+\toprule
+\multicolumn{2}{@{}l}{\textbf{Objective primitives}} \\
+\midrule
+Identify    & Cell tooltips; KPI cards; AHP weight \& CR display \\
+Compare     & Glyph pin-and-overlay; radar chart; method switching; multi-pathway DFES \\
+Rank        & MCDA choropleth (viridis); parallel-coordinate weight axes \\
+Associate   & Map $\rightarrow$ DFES linking; placement $\rightarrow$ KPI; supply--demand overlay; weight $\rightarrow$ choropleth \\
+Delineate   & Multi-resolution glyphs; green/red DFES shading; scope toggle; boundary overlays \\
+\midrule
+\multicolumn{2}{@{}l}{\textbf{Enabling operators}} \\
+\midrule
+Save        & Save scenario (weights, method, AHP, placements) to local storage \\
+Export      & Download scenarios as JSON \\
+Import      & Load JSON scenario files \\
+Edit        & Modify placements; revise AHP values; drag weight handles \\
+Annotate    & Name scenarios; reverse-geocoded addresses; timestamps \\
+\midrule
+\multicolumn{2}{@{}l}{\textbf{Work operators}} \\
+\midrule
+Reexpress   & Switch MCDA method; choropleth $\leftrightarrow$ glyph; bar $\leftrightarrow$ rose \\
+Arrange     & Glyph resolution (r6--r10); zoom-adaptive H3 aggregation \\
+Sequence    & DFES timeseries 2025--2050; scope Network $\rightarrow$ Borough $\rightarrow$ LSOA \\
+Resymbolize & Opacity slider; colour scale; glyph size; polarity toggle \\
+Overlay     & LSOA/borough boundaries; chargepoints; glyphs; DFES supply line \\
+Pan         & Map drag; AHP graph panning \\
+Zoom        & Semantic zoom (zoom $\rightarrow$ H3 res.); AHP graph zoom \\
+Reproject   & \emph{-- (fixed Web Mercator)} \\
+Search      & LSOA search in DFES; scenario name search \\
+Filter      & Toggle criteria; toggle pathways; toggle scenario visibility \\
+Retrieve    & Cell click $\rightarrow$ data record; DFES tooltip; KPI readout \\
+Calculate   & MCDA scoring; AHP solver; impact model; metric conversion; year of constriction \\
+\bottomrule
+\end{tabular}
+\end{table}
