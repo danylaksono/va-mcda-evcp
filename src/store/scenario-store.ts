@@ -19,11 +19,13 @@ import {
 const STORAGE_KEY = 'va-mcda-evcp-scenarios'
 const VISIBILITY_KEY = 'va-mcda-evcp-scenario-visibility'
 const COMPARED_KEY = 'va-mcda-evcp-scenario-compared'
+const REFERENCE_KEY = 'va-mcda-evcp-reference-scenario'
 const MAX_COMPARED = 8
 
 interface ScenarioState {
   scenarios: Scenario[]
   activeScenarioId: string | null
+  referenceScenarioId: string | null
   visibleScenarioIds: Set<string>
   comparedScenarioIds: string[]
   currentPlacements: EVCPPlacement[]
@@ -53,6 +55,7 @@ interface ScenarioState {
   deleteScenario: (id: string) => void
   loadScenario: (id: string) => Scenario | null
   setActiveScenario: (id: string | null) => void
+  setReferenceScenario: (id: string | null) => void
 
   toggleScenarioVisibility: (id: string) => void
   toggleScenarioComparison: (id: string) => void
@@ -95,6 +98,7 @@ function loadArrayFromStorage(key: string): string[] {
 export const useScenarioStore = create<ScenarioState>((set, get) => ({
   scenarios: [],
   activeScenarioId: null,
+  referenceScenarioId: null,
   visibleScenarioIds: new Set<string>(),
   comparedScenarioIds: [],
   currentPlacements: [],
@@ -187,11 +191,15 @@ export const useScenarioStore = create<ScenarioState>((set, get) => ({
       visibleScenarioIds: nextVisible,
       comparedScenarioIds: nextCompared,
       activeScenarioId: get().activeScenarioId === id ? null : get().activeScenarioId,
+      referenceScenarioId: get().referenceScenarioId === id ? null : get().referenceScenarioId,
     })
     get().saveToStorage()
     try {
       localStorage.setItem(VISIBILITY_KEY, JSON.stringify([...nextVisible]))
       localStorage.setItem(COMPARED_KEY, JSON.stringify(nextCompared))
+      if (get().referenceScenarioId === null) {
+        localStorage.removeItem(REFERENCE_KEY)
+      }
     } catch { /* ignore */ }
   },
 
@@ -200,6 +208,18 @@ export const useScenarioStore = create<ScenarioState>((set, get) => ({
   },
 
   setActiveScenario: (id) => set({ activeScenarioId: id }),
+
+  setReferenceScenario: (id) => {
+    const next = id && get().scenarios.some((scenario) => scenario.id === id) ? id : null
+    set({ referenceScenarioId: next })
+    try {
+      if (next) {
+        localStorage.setItem(REFERENCE_KEY, next)
+      } else {
+        localStorage.removeItem(REFERENCE_KEY)
+      }
+    } catch { /* ignore */ }
+  },
 
   toggleScenarioVisibility: (id) => {
     const next = new Set(get().visibleScenarioIds)
@@ -327,10 +347,16 @@ export const useScenarioStore = create<ScenarioState>((set, get) => ({
         const scenarios = JSON.parse(raw) as Scenario[]
         const visible = loadSetFromStorage(VISIBILITY_KEY)
         const compared = loadArrayFromStorage(COMPARED_KEY)
+        const reference = localStorage.getItem(REFERENCE_KEY)
         const scenarioIds = new Set(scenarios.map((s) => s.id))
         const validVisible = new Set([...visible].filter((id) => scenarioIds.has(id)))
         const validCompared = compared.filter((id) => scenarioIds.has(id))
-        set({ scenarios, visibleScenarioIds: validVisible, comparedScenarioIds: validCompared })
+        set({
+          scenarios,
+          visibleScenarioIds: validVisible,
+          comparedScenarioIds: validCompared,
+          referenceScenarioId: reference && scenarioIds.has(reference) ? reference : null,
+        })
       }
     } catch {
       console.warn('Failed to load scenarios from localStorage')

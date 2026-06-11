@@ -6,11 +6,15 @@ import { formatEnergy, formatCO2, formatCurrency, formatPercent, formatCompact }
 interface KPICardDef {
   label: string
   value: string
+  rawValue: number
+  getValue: (impact: ImpactEstimate) => number
+  formatValue: (value: number) => string
   sublabel: string
   color: string
   bg: string
   border: string
   info: string
+  lowerIsBetter?: boolean
 }
 
 function InfoTooltip({ text }: { text: string }) {
@@ -56,13 +60,32 @@ function InfoTooltip({ text }: { text: string }) {
 
 interface KPICardsProps {
   impact: ImpactEstimate
+  comparison?: {
+    label: string
+    impact: ImpactEstimate
+  }
+  primaryLabel?: string
 }
 
-export function KPICards({ impact }: KPICardsProps) {
+function formatSignedDelta(value: number, formatter: (value: number) => string): string {
+  if (Math.abs(value) < 0.0001) return 'same'
+  return `${value > 0 ? '+' : '-'}${formatter(Math.abs(value))}`
+}
+
+function getDeltaColor(delta: number, lowerIsBetter?: boolean): string {
+  if (Math.abs(delta) < 0.0001) return 'text-slate-400'
+  const isFavourable = lowerIsBetter ? delta < 0 : delta > 0
+  return isFavourable ? 'text-emerald-700' : 'text-rose-600'
+}
+
+export function KPICards({ impact, comparison, primaryLabel = 'Current draft' }: KPICardsProps) {
   const cards: KPICardDef[] = [
     {
       label: 'Energy Delivered',
       value: formatEnergy(impact.energyDeliveredKWh),
+      rawValue: impact.energyDeliveredKWh,
+      getValue: (estimate) => estimate.energyDeliveredKWh,
+      formatValue: formatEnergy,
       sublabel: '/year',
       color: 'text-emerald-600',
       bg: 'bg-emerald-50',
@@ -72,6 +95,9 @@ export function KPICards({ impact }: KPICardsProps) {
     {
       label: 'Carbon Saved',
       value: formatCO2(impact.carbonSavedTonnes),
+      rawValue: impact.carbonSavedTonnes,
+      getValue: (estimate) => estimate.carbonSavedTonnes,
+      formatValue: formatCO2,
       sublabel: '/year',
       color: 'text-teal-600',
       bg: 'bg-teal-50',
@@ -81,15 +107,22 @@ export function KPICards({ impact }: KPICardsProps) {
     {
       label: 'Install Cost',
       value: formatCurrency(impact.installCostGBP),
+      rawValue: impact.installCostGBP,
+      getValue: (estimate) => estimate.installCostGBP,
+      formatValue: formatCurrency,
       sublabel: 'total',
       color: 'text-blue-600',
       bg: 'bg-blue-50',
       border: 'border-blue-200',
       info: 'Sum of per-unit costs × number of chargers at each site. Costs vary by type: slow £1k, fast £5k, rapid £40k, ultra-rapid £100k per unit.',
+      lowerIsBetter: true,
     },
     {
       label: 'Annual Revenue',
       value: formatCurrency(impact.annualRevenue),
+      rawValue: impact.annualRevenue,
+      getValue: (estimate) => estimate.annualRevenue,
+      formatValue: formatCurrency,
       sublabel: '/year',
       color: 'text-violet-600',
       bg: 'bg-violet-50',
@@ -99,24 +132,35 @@ export function KPICards({ impact }: KPICardsProps) {
     {
       label: 'Peak Demand',
       value: `${impact.peakDemandKW.toFixed(0)} kW`,
+      rawValue: impact.peakDemandKW,
+      getValue: (estimate) => estimate.peakDemandKW,
+      formatValue: (value) => `${value.toFixed(0)} kW`,
       sublabel: 'grid load',
       color: 'text-orange-600',
       bg: 'bg-orange-50',
       border: 'border-orange-200',
       info: 'Peak grid load = total chargers × rated power × 0.7 diversity factor. The diversity factor accounts for the fact that not all chargers operate at full power simultaneously.',
+      lowerIsBetter: true,
     },
     {
       label: 'Headroom Impact',
       value: formatPercent(impact.headroomImpactPct),
+      rawValue: impact.headroomImpactPct,
+      getValue: (estimate) => estimate.headroomImpactPct,
+      formatValue: (value) => formatPercent(value),
       sublabel: 'of capacity',
       color: impact.headroomImpactPct > 80 ? 'text-red-600' : 'text-amber-600',
       bg: impact.headroomImpactPct > 80 ? 'bg-red-50' : 'bg-amber-50',
       border: impact.headroomImpactPct > 80 ? 'border-red-200' : 'border-amber-200',
       info: 'Headroom = peak demand / estimated local grid capacity. Grid capacity is estimated from the normalised headroom value in the MCDA data (× 5,000 kW). Values above 80% indicate potential grid stress.',
+      lowerIsBetter: true,
     },
     {
       label: 'Population Served',
       value: formatCompact(impact.populationServed, 0),
+      rawValue: impact.populationServed,
+      getValue: (estimate) => estimate.populationServed,
+      formatValue: (value) => formatCompact(value, 0),
       sublabel: 'people',
       color: 'text-indigo-600',
       bg: 'bg-indigo-50',
@@ -126,6 +170,9 @@ export function KPICards({ impact }: KPICardsProps) {
     {
       label: 'Utilization',
       value: formatPercent(impact.utilizationFactor * 100),
+      rawValue: impact.utilizationFactor * 100,
+      getValue: (estimate) => estimate.utilizationFactor * 100,
+      formatValue: (value) => formatPercent(value),
       sublabel: 'avg rate',
       color: 'text-cyan-600',
       bg: 'bg-cyan-50',
@@ -136,27 +183,47 @@ export function KPICards({ impact }: KPICardsProps) {
 
   return (
     <div className="space-y-1.5">
-      <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">
-        Key Performance Indicators
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">
+          Key Performance Indicators
+        </div>
+        <div className="truncate text-[9px] text-slate-400">
+          {comparison ? `${primaryLabel} vs ${comparison.label}` : primaryLabel}
+        </div>
       </div>
       <div className="grid grid-cols-2 gap-1.5">
-        {cards.map((card) => (
-          <div
-            key={card.label}
-            className={`p-2.5 rounded-xl border ${card.border} ${card.bg}`}
-          >
-            <div className="flex items-center justify-between">
-              <div className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">
-                {card.label}
+        {cards.map((card) => {
+          const baselineValue = comparison ? card.getValue(comparison.impact) : 0
+          const delta = comparison ? card.rawValue - baselineValue : 0
+
+          return (
+            <div
+              key={card.label}
+              className={`p-2.5 rounded-xl border ${card.border} ${card.bg}`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">
+                  {card.label}
+                </div>
+                <InfoTooltip text={card.info} />
               </div>
-              <InfoTooltip text={card.info} />
+              <div className={`text-base font-mono font-bold ${card.color} mt-0.5 leading-tight`}>
+                {card.value}
+              </div>
+              <div className="text-[8px] text-slate-400 font-medium">{card.sublabel}</div>
+              {comparison && (
+                <div className="mt-1 flex items-center justify-between gap-1 border-t border-white/70 pt-1 text-[8px]">
+                  <span className="truncate text-slate-500">
+                    Ref {card.formatValue(baselineValue)}
+                  </span>
+                  <span className={`font-bold ${getDeltaColor(delta, card.lowerIsBetter)}`}>
+                    {formatSignedDelta(delta, card.formatValue)}
+                  </span>
+                </div>
+              )}
             </div>
-            <div className={`text-base font-mono font-bold ${card.color} mt-0.5 leading-tight`}>
-              {card.value}
-            </div>
-            <div className="text-[8px] text-slate-400 font-medium">{card.sublabel}</div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )

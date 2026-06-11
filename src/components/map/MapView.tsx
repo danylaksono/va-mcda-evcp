@@ -13,7 +13,7 @@ import { Protocol } from 'pmtiles'
 import { useMapStore } from '@/store/map-store'
 import { useMCDAStore } from '@/store/mcda-store'
 import { useScenarioStore } from '@/store/scenario-store'
-import { h3ScoresToGeoJSON, getH3Center } from '@/utils/h3-utils'
+import { h3ScoresToGeoJSON, getH3Center, zoomToH3Resolution } from '@/utils/h3-utils'
 import { scoreToColor } from '@/utils/color-scales'
 import { ChargerConfig } from '../impact/ChargerConfig'
 import { Maximize2, Minimize2, SlidersHorizontal, Zap } from 'lucide-react'
@@ -667,7 +667,6 @@ export function MapView({ mcdaResults }: MapViewProps) {
   const isMapReady = useMapStore((s) => s.isMapReady)
   const selectH3Cell = useMapStore((s) => s.selectH3Cell)
   const selectedH3Cell = useMapStore((s) => s.selectedH3Cell)
-  const setZoom = useMapStore((s) => s.setZoom)
   const criteria = useMCDAStore((s) => s.criteria)
 
   const setSelectedLSOA = useMapStore((s) => s.setSelectedLSOA)
@@ -1223,11 +1222,23 @@ export function MapView({ mcdaResults }: MapViewProps) {
     })
 
     map.on('zoomend', () => {
-      setZoom(Math.round(map.getZoom()))
+      const zoom = map.getZoom()
+      const nextZoom = Math.round(zoom)
+      const nextDisplayResolution = zoomToH3Resolution(zoom)
+      const {
+        displayResolution,
+        setDisplayResolution,
+        setZoom,
+      } = useMapStore.getState()
+
+      setZoom(nextZoom)
+      if (displayResolution !== nextDisplayResolution) {
+        setDisplayResolution(nextDisplayResolution)
+      }
     })
 
     mapRef.current = map
-  }, [setMapReady, selectH3Cell, setSelectedPlacementCell, setZoom])
+  }, [setMapReady, selectH3Cell, setSelectedPlacementCell])
 
   useEffect(() => {
     isSimulationModeRef.current = isSimulationMode

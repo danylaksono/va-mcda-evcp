@@ -2,9 +2,9 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { query } from '@/db/duckdb-client'
 import { loadAllData, getRowCount } from '@/db/data-loader'
 import { buildMCDAQuery } from '@/analysis/mcda-engine'
+import type { Criterion, MCDAMethod } from '@/analysis/types'
 import { useMCDAStore } from '@/store/mcda-store'
 import { useMapStore } from '@/store/map-store'
-import { zoomToH3Resolution } from '@/utils/h3-utils'
 import { cellToParent } from 'h3-js'
 
 interface LoadingState {
@@ -77,22 +77,136 @@ interface MCDAQueryResult {
   borough_name?: string
 }
 
+const MAX_MCDA_SCENARIO_CACHE_SIZE = 6
+
+function getScenarioKey(method: MCDAMethod, criteria: Criterion[]): string {
+  return JSON.stringify({
+    method,
+    criteria: criteria.map((criterion) => ({
+      id: criterion.id,
+      active: criterion.active,
+      weight: Number(criterion.weight.toFixed(6)),
+      polarity: criterion.polarity,
+    })),
+  })
+}
+
+function aggregateResultsByResolution(
+  rawData: MCDAQueryResult[],
+  displayResolution: number
+): MCDAQueryResult[] {
+  if (displayResolution >= 10) return rawData
+
+  const groups = new Map<string, {
+    sum: number
+    count: number
+    criterionSums: Record<string, number>
+    rawSums: Record<string, number>
+    lsoa21cd?: string
+    lsoa21nm?: string
+    borough_name?: string
+  }>()
+
+  for (const row of rawData) {
+    try {
+      const parentCell = cellToParent(row.h3_cell, displayResolution)
+      const existing = groups.get(parentCell)
+      if (existing) {
+        existing.sum += row.mcda_score
+        existing.count += 1
+        if (row.criterion_values) {
+          for (const [criterionId, value] of Object.entries(row.criterion_values)) {
+            existing.criterionSums[criterionId] = (existing.criterionSums[criterionId] ?? 0) + value
+          }
+        }
+        if (row.raw_values) {
+          for (const [criterionId, value] of Object.entries(row.raw_values)) {
+            existing.rawSums[criterionId] = (existing.rawSums[criterionId] ?? 0) + value
+          }
+        }
+      } else {
+        const criterionSums: Record<string, number> = {}
+        const rawSums: Record<string, number> = {}
+        if (row.criterion_values) {
+          for (const [criterionId, value] of Object.entries(row.criterion_values)) {
+            criterionSums[criterionId] = value
+          }
+        }
+        if (row.raw_values) {
+          for (const [criterionId, value] of Object.entries(row.raw_values)) {
+            rawSums[criterionId] = value
+          }
+        }
+        groups.set(parentCell, {
+          sum: row.mcda_score,
+          count: 1,
+          criterionSums,
+          rawSums,
+          lsoa21cd: row.lsoa21cd,
+          lsoa21nm: row.lsoa21nm,
+          borough_name: row.borough_name,
+        })
+      }
+    } catch {
+      // skip invalid cells
+    }
+  }
+
+  return Array.from(groups.entries()).map(([cell, group]) => {
+    const criterionValues: Record<string, number> = {}
+    const rawValues: Record<string, number> = {}
+    for (const [criterionId, value] of Object.entries(group.criterionSums)) {
+      criterionValues[criterionId] = value / group.count
+    }
+    for (const [criterionId, value] of Object.entries(group.rawSums)) {
+      rawValues[criterionId] = value / group.count
+    }
+    return {
+      h3_cell: cell,
+      mcda_score: group.sum / group.count,
+      criterion_values: criterionValues,
+      raw_values: rawValues,
+      lsoa21cd: group.lsoa21cd,
+      lsoa21nm: group.lsoa21nm,
+      borough_name: group.borough_name,
+    }
+  })
+}
+
 /**
- * Hook to run MCDA queries at the appropriate H3 resolution based on map zoom.
- * Aggregates results to coarser resolutions for performance.
+ * Hook to score MCDA scenarios once, then reuse cached display aggregations
+ * as the map crosses H3 resolution bands.
  */
 export function useMCDAQuery() {
   const criteria = useMCDAStore((s) => s.criteria)
   const method = useMCDAStore((s) => s.method)
   const setComputing = useMCDAStore((s) => s.setComputing)
   const setLastComputeTime = useMCDAStore((s) => s.setLastComputeTime)
-  const zoom = useMapStore((s) => s.zoom)
+  const displayResolution = useMapStore((s) => s.displayResolution)
 
   const [results, setResults] = useState<MCDAQueryResult[]>([])
+  const [baseResults, setBaseResults] = useState<{ key: string; data: MCDAQueryResult[] } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>()
+  const queryRunRef = useRef(0)
+  const baseCacheRef = useRef<Map<string, MCDAQueryResult[]>>(new Map())
+  const displayCacheRef = useRef<Map<string, Map<number, MCDAQueryResult[]>>>(new Map())
+  const scenarioKey = getScenarioKey(method, criteria)
 
   const runQuery = useCallback(async () => {
+    const runId = queryRunRef.current + 1
+    queryRunRef.current = runId
+
+    const cached = baseCacheRef.current.get(scenarioKey)
+    if (cached) {
+      baseCacheRef.current.delete(scenarioKey)
+      baseCacheRef.current.set(scenarioKey, cached)
+      setBaseResults({ key: scenarioKey, data: cached })
+      setComputing(false)
+      setError(null)
+      return
+    }
+
     try {
       setComputing(true)
       const start = performance.now()
@@ -156,94 +270,30 @@ ORDER BY scored.mcda_score DESC`
         }
       })
 
-      const displayResolution = zoomToH3Resolution(zoom)
-
-      let data: MCDAQueryResult[]
-      if (displayResolution < 10) {
-        const groups = new Map<string, {
-          sum: number
-          count: number
-          criterionSums: Record<string, number>
-          rawSums: Record<string, number>
-          lsoa21cd?: string
-          lsoa21nm?: string
-          borough_name?: string
-        }>()
-        for (const row of rawData) {
-          try {
-            const parentCell = cellToParent(row.h3_cell, displayResolution)
-            const existing = groups.get(parentCell)
-            if (existing) {
-              existing.sum += row.mcda_score
-              existing.count += 1
-              if (row.criterion_values) {
-                for (const [criterionId, value] of Object.entries(row.criterion_values)) {
-                  existing.criterionSums[criterionId] = (existing.criterionSums[criterionId] ?? 0) + value
-                }
-              }
-              if (row.raw_values) {
-                for (const [criterionId, value] of Object.entries(row.raw_values)) {
-                  existing.rawSums[criterionId] = (existing.rawSums[criterionId] ?? 0) + value
-                }
-              }
-            } else {
-              const criterionSums: Record<string, number> = {}
-              const rawSums: Record<string, number> = {}
-              if (row.criterion_values) {
-                for (const [criterionId, value] of Object.entries(row.criterion_values)) {
-                  criterionSums[criterionId] = value
-                }
-              }
-              if (row.raw_values) {
-                for (const [criterionId, value] of Object.entries(row.raw_values)) {
-                  rawSums[criterionId] = value
-                }
-              }
-              groups.set(parentCell, {
-                sum: row.mcda_score, count: 1, criterionSums, rawSums,
-                lsoa21cd: row.lsoa21cd,
-                lsoa21nm: row.lsoa21nm,
-                borough_name: row.borough_name,
-              })
-            }
-          } catch {
-            // skip invalid cells
-          }
-        }
-        data = Array.from(groups.entries()).map(([cell, g]) => {
-          const criterionValues: Record<string, number> = {}
-          const rawValues: Record<string, number> = {}
-          for (const [criterionId, value] of Object.entries(g.criterionSums)) {
-            criterionValues[criterionId] = value / g.count
-          }
-          for (const [criterionId, value] of Object.entries(g.rawSums)) {
-            rawValues[criterionId] = value / g.count
-          }
-          return {
-            h3_cell: cell,
-            mcda_score: g.sum / g.count,
-            criterion_values: criterionValues,
-            raw_values: rawValues,
-            lsoa21cd: g.lsoa21cd,
-            lsoa21nm: g.lsoa21nm,
-            borough_name: g.borough_name,
-          }
-        })
-      } else {
-        data = rawData
-      }
-
       const elapsed = performance.now() - start
+      if (queryRunRef.current !== runId) return
 
-      setResults(data)
+      baseCacheRef.current.set(scenarioKey, rawData)
+      displayCacheRef.current.delete(scenarioKey)
+      if (baseCacheRef.current.size > MAX_MCDA_SCENARIO_CACHE_SIZE) {
+        const oldestKey = baseCacheRef.current.keys().next().value
+        if (oldestKey) {
+          baseCacheRef.current.delete(oldestKey)
+          displayCacheRef.current.delete(oldestKey)
+        }
+      }
+      setBaseResults({ key: scenarioKey, data: rawData })
       setLastComputeTime(elapsed)
       setError(null)
     } catch (err) {
+      if (queryRunRef.current !== runId) return
       setError(err instanceof Error ? err.message : 'Query failed')
     } finally {
-      setComputing(false)
+      if (queryRunRef.current === runId) {
+        setComputing(false)
+      }
     }
-  }, [criteria, method, zoom, setComputing, setLastComputeTime])
+  }, [criteria, method, scenarioKey, setComputing, setLastComputeTime])
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -252,6 +302,24 @@ ORDER BY scored.mcda_score DESC`
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
   }, [runQuery])
+
+  useEffect(() => {
+    if (!baseResults || baseResults.key !== scenarioKey) return
+
+    const displayCache =
+      displayCacheRef.current.get(scenarioKey) ?? new Map<number, MCDAQueryResult[]>()
+    displayCacheRef.current.set(scenarioKey, displayCache)
+
+    const cached = displayCache.get(displayResolution)
+    if (cached) {
+      setResults(cached)
+      return
+    }
+
+    const aggregated = aggregateResultsByResolution(baseResults.data, displayResolution)
+    displayCache.set(displayResolution, aggregated)
+    setResults(aggregated)
+  }, [baseResults, displayResolution, scenarioKey])
 
   return { results, error }
 }

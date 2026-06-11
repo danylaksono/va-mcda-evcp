@@ -32,7 +32,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   bounds: null,
   selectedH3Cell: null,
   hoveredH3Cell: null,
-  displayResolution: 7,
+  displayResolution: 8,
   isMapReady: false,
   visibleLayers: ['mcda-h3'],
   selectedLSOA: null,
