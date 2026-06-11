@@ -6,6 +6,7 @@ describe('Scenario Store', () => {
     useScenarioStore.setState({
       scenarios: [],
       activeScenarioId: null,
+      referenceScenarioId: null,
       visibleScenarioIds: new Set(),
       comparedScenarioIds: [],
       currentPlacements: [],
@@ -76,6 +77,29 @@ describe('Scenario Store', () => {
       store.deleteScenario(id)
 
       expect(useScenarioStore.getState().scenarios).toHaveLength(0)
+    })
+
+    it('selects and clears a reference scenario', () => {
+      const store = useScenarioStore.getState()
+      store.saveScenario('S1', {}, 'WSM')
+      const id = useScenarioStore.getState().scenarios[0].id
+
+      store.setReferenceScenario(id)
+      expect(useScenarioStore.getState().referenceScenarioId).toBe(id)
+
+      store.setReferenceScenario(null)
+      expect(useScenarioStore.getState().referenceScenarioId).toBeNull()
+    })
+
+    it('clears reference scenario when deleted', () => {
+      const store = useScenarioStore.getState()
+      store.saveScenario('S1', {}, 'WSM')
+      const id = useScenarioStore.getState().scenarios[0].id
+
+      store.setReferenceScenario(id)
+      store.deleteScenario(id)
+
+      expect(useScenarioStore.getState().referenceScenarioId).toBeNull()
     })
 
     it('loads a scenario by id', () => {

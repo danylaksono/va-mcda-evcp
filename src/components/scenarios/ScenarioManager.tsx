@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import {
   Bookmark,
+  CheckCircle2,
   Eye,
   EyeOff,
   FolderOpen,
@@ -30,11 +31,13 @@ export function ScenarioManager() {
 
   const scenarios = useScenarioStore((s) => s.scenarios)
   const activeScenarioId = useScenarioStore((s) => s.activeScenarioId)
+  const referenceScenarioId = useScenarioStore((s) => s.referenceScenarioId)
   const visibleScenarioIds = useScenarioStore((s) => s.visibleScenarioIds)
   const comparedScenarioIds = useScenarioStore((s) => s.comparedScenarioIds)
   const saveScenario = useScenarioStore((s) => s.saveScenario)
   const deleteScenario = useScenarioStore((s) => s.deleteScenario)
   const setActiveScenario = useScenarioStore((s) => s.setActiveScenario)
+  const setReferenceScenario = useScenarioStore((s) => s.setReferenceScenario)
   const setPlacements = useScenarioStore((s) => s.setPlacements)
   const setSelectedPlacementCell = useScenarioStore((s) => s.setSelectedPlacementCell)
   const toggleScenarioVisibility = useScenarioStore((s) => s.toggleScenarioVisibility)
@@ -111,6 +114,10 @@ export function ScenarioManager() {
     setPlacements(scenario.placements)
     setSelectedPlacementCell(null)
     setActiveScenario(scenario.id)
+  }
+
+  function handleReferenceSelect(scenarioId: string) {
+    setReferenceScenario(referenceScenarioId === scenarioId ? null : scenarioId)
   }
 
   function handleExportAll() {
@@ -276,22 +283,39 @@ export function ScenarioManager() {
             const isVisible = visibleScenarioIds.has(scenario.id)
             const isCompared = comparedScenarioIds.includes(scenario.id)
             const isActive = activeScenarioId === scenario.id
+            const isReference = referenceScenarioId === scenario.id
 
             return (
               <div
                 key={scenario.id}
-                className={`p-2 rounded-xl border transition-all ${
-                  isActive
+                role="button"
+                tabIndex={0}
+                aria-pressed={isReference}
+                onClick={() => handleReferenceSelect(scenario.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    handleReferenceSelect(scenario.id)
+                  }
+                }}
+                className={`p-2 rounded-xl border transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-500/30 ${
+                  isReference
+                    ? 'bg-slate-900 border-slate-900 text-white shadow-sm'
+                    : isActive
                     ? 'bg-brand-50 border-brand-200'
                     : isCompared
                     ? 'border-slate-300 bg-slate-50'
                     : 'bg-white border-slate-100 hover:border-slate-200'
                 }`}
+                title={isReference ? 'Selected as KPI reference' : 'Select as KPI reference'}
               >
                 <div className="flex items-center gap-1.5">
                   {/* Color swatch / comparison indicator */}
                   <button
-                    onClick={() => toggleScenarioComparison(scenario.id)}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      toggleScenarioComparison(scenario.id)
+                    }}
                     className="flex-shrink-0 rounded-full border transition-all"
                     style={{
                       width: 12,
@@ -305,10 +329,18 @@ export function ScenarioManager() {
 
                   {/* Name + meta */}
                   <div className="flex-1 min-w-0">
-                    <div className="text-[11px] font-bold text-slate-700 truncate">
-                      {scenario.name}
+                    <div className="flex items-center gap-1.5">
+                      <div className={`text-[11px] font-bold truncate ${isReference ? 'text-white' : 'text-slate-700'}`}>
+                        {scenario.name}
+                      </div>
+                      {isReference && (
+                        <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-white/12 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-white">
+                          <CheckCircle2 className="h-2.5 w-2.5" strokeWidth={2.4} />
+                          Ref
+                        </span>
+                      )}
                     </div>
-                    <div className="flex items-center gap-1.5 text-[8px] text-slate-400">
+                    <div className={`flex items-center gap-1.5 text-[8px] ${isReference ? 'text-slate-300' : 'text-slate-400'}`}>
                       <span>{scenario.method}</span>
                       <span className="opacity-40">|</span>
                       <span>{scenario.placements.length} loc</span>
@@ -320,9 +352,14 @@ export function ScenarioManager() {
                   {/* Actions */}
                   <div className="flex items-center gap-0.5 flex-shrink-0">
                     <button
-                      onClick={() => toggleScenarioVisibility(scenario.id)}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        toggleScenarioVisibility(scenario.id)
+                      }}
                       className={`p-1 rounded-md transition-colors ${
-                        isVisible ? 'text-slate-600 hover:text-slate-800' : 'text-slate-300 hover:text-slate-500'
+                        isReference
+                          ? isVisible ? 'text-white hover:text-slate-200' : 'text-slate-400 hover:text-slate-200'
+                          : isVisible ? 'text-slate-600 hover:text-slate-800' : 'text-slate-300 hover:text-slate-500'
                       }`}
                       title={isVisible ? 'Hide overlay' : 'Show overlay'}
                     >
@@ -333,22 +370,37 @@ export function ScenarioManager() {
                       )}
                     </button>
                     <button
-                      onClick={() => handleRestore(scenario.id)}
-                      className="p-1 rounded-md text-brand-500 hover:text-brand-700 transition-colors"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        handleRestore(scenario.id)
+                      }}
+                      className={`p-1 rounded-md transition-colors ${
+                        isReference ? 'text-white hover:text-slate-200' : 'text-brand-500 hover:text-brand-700'
+                      }`}
                       title="Load (restore to draft)"
                     >
                       <FolderOpen className="h-3 w-3" strokeWidth={2.2} />
                     </button>
                     <button
-                      onClick={() => handleExportSingle(scenario.id)}
-                      className="p-1 rounded-md text-slate-400 hover:text-slate-600 transition-colors"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        handleExportSingle(scenario.id)
+                      }}
+                      className={`p-1 rounded-md transition-colors ${
+                        isReference ? 'text-slate-300 hover:text-white' : 'text-slate-400 hover:text-slate-600'
+                      }`}
                       title="Export JSON"
                     >
                       <Download className="h-3 w-3" strokeWidth={2.2} />
                     </button>
                     <button
-                      onClick={() => deleteScenario(scenario.id)}
-                      className="p-1 rounded-md text-slate-300 hover:text-red-500 transition-colors"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        deleteScenario(scenario.id)
+                      }}
+                      className={`p-1 rounded-md transition-colors ${
+                        isReference ? 'text-slate-400 hover:text-red-300' : 'text-slate-300 hover:text-red-500'
+                      }`}
                       title="Delete"
                     >
                       <Trash2 className="h-3 w-3" strokeWidth={2.2} />
@@ -366,7 +418,7 @@ export function ScenarioManager() {
                         className="h-full rounded-full"
                         style={{
                           width: `${(scenario.weights[c.id] ?? 0) * 100}%`,
-                          backgroundColor: isCompared ? color : isVisible ? MUTED_COLOR : c.color,
+                          backgroundColor: isReference ? '#ffffff' : isCompared ? color : isVisible ? MUTED_COLOR : c.color,
                           opacity: isCompared ? 0.7 : isVisible ? 0.4 : 0.6,
                         }}
                       />

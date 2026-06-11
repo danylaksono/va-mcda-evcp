@@ -121,8 +121,15 @@ export function ImpactPanel() {
   const currentImpact = useScenarioStore((s) => s.currentImpact)
   const scenarios = useScenarioStore((s) => s.scenarios)
   const activeScenarioId = useScenarioStore((s) => s.activeScenarioId)
+  const referenceScenarioId = useScenarioStore((s) => s.referenceScenarioId)
   const setCurrentImpact = useScenarioStore((s) => s.setCurrentImpact)
   const removePlacement = useScenarioStore((s) => s.removePlacement)
+
+  const referenceScenario = useMemo(
+    () => scenarios.find((scenario) => scenario.id === referenceScenarioId) ?? null,
+    [referenceScenarioId, scenarios]
+  )
+  const referenceImpact = referenceScenario?.impactSummary ?? null
 
   const { computable, missing } = useMemo(() => {
     const computable: EVCPPlacement[] = []
@@ -172,15 +179,31 @@ export function ImpactPanel() {
       </div>
 
       {currentPlacements.length === 0 ? (
-        <div className="text-center py-6 border border-dashed border-slate-200 rounded-xl">
-          <MapPin className="h-5 w-5 text-slate-300 mx-auto mb-1.5" strokeWidth={1.5} />
-          <div className="text-[11px] text-slate-400 font-medium">
-            No chargers placed yet
+        <>
+          <div className="text-center py-6 border border-dashed border-slate-200 rounded-xl">
+            <MapPin className="h-5 w-5 text-slate-300 mx-auto mb-1.5" strokeWidth={1.5} />
+            <div className="text-[11px] text-slate-400 font-medium">
+              No chargers placed yet
+            </div>
+            <div className="text-[10px] text-slate-300 mt-0.5">
+              Enable simulation mode and click on the map to place EVCP chargers
+            </div>
           </div>
-          <div className="text-[10px] text-slate-300 mt-0.5">
-            Enable simulation mode and click on the map to place EVCP chargers
-          </div>
-        </div>
+          {referenceScenario && referenceImpact && (
+            <KPICards
+              impact={referenceImpact}
+              primaryLabel={`Reference: ${referenceScenario.name}`}
+            />
+          )}
+          {referenceScenario && !referenceImpact && (
+            <div className="flex items-start gap-2 p-2 bg-slate-50 border border-slate-200 rounded-lg">
+              <AlertTriangle className="h-3.5 w-3.5 text-slate-400 mt-0.5 flex-shrink-0" />
+              <div className="text-[10px] text-slate-500">
+                Selected reference has no saved impact data.
+              </div>
+            </div>
+          )}
+        </>
       ) : (
         <>
           {missing.length > 0 && (
@@ -243,7 +266,24 @@ export function ImpactPanel() {
 
           <LSOABreakdownSection computable={computable} />
 
-          {currentImpact && <KPICards impact={currentImpact} />}
+          {currentImpact && (
+            <KPICards
+              impact={currentImpact}
+              comparison={referenceScenario && referenceImpact ? {
+                label: referenceScenario.name,
+                impact: referenceImpact,
+              } : undefined}
+            />
+          )}
+
+          {currentImpact && referenceScenario && !referenceImpact && (
+            <div className="flex items-start gap-2 p-2 bg-slate-50 border border-slate-200 rounded-lg">
+              <AlertTriangle className="h-3.5 w-3.5 text-slate-400 mt-0.5 flex-shrink-0" />
+              <div className="text-[10px] text-slate-500">
+                Selected reference has no saved impact data.
+              </div>
+            </div>
+          )}
 
           {computable.length > 0 && !currentImpact && (
             <div className="text-center py-3">

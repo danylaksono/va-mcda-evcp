@@ -2,7 +2,13 @@
 
 Interactive visual analytics for multi-criteria decision analysis of electric vehicle charging point siting in Greater London.
 
+![](ss.png)
+
+
 The project supports urban infrastructure planners who need to balance accessibility, electricity grid capacity, transport demand, environmental pressure, and equity. It combines real-time MCDA scoring, spatial visualisation, multivariate glyphs, scenario saving, charger placement, impact estimation, and DFES future-energy context in a browser-only dashboard.
+
+
+
 
 ## Research Summary
 
@@ -122,24 +128,26 @@ data_source/
   pmtiles/*.pmtiles      # Vector overlays for boundaries and existing chargepoints
 ```
 
-Runtime pipeline:
-
-1. Fetch Parquet layers from `data_source/`.
-2. Register each file as an in-memory DuckDB table.
-3. Join all tables by `h3_cell` into `mcda_base`.
-4. Generate MCDA SQL from the active method, weights, polarities, and criteria.
-5. Return scored H3 cells with raw values, normalised values, LSOA code, LSOA name, and borough metadata.
-6. Render the map, glyphs, diagnostics, and impact panels from the shared result set.
-
-The source provenance for the derived layers is documented in [paper_materials/raw/data sources.md](paper_materials/raw/data%20sources.md) and the field inventory is documented in [docs/data_attributes.md](docs/data_attributes.md).
-
-Primary data sources include:
+Primary data sources for this project include:
 
 - OpenChargeMap for public operational rapid chargepoint locations.
 - ONS Census 2021 for population density, car ownership, disability, and deprivation.
 - UK Power Networks for secondary substation headroom and DFES projections.
 - London Atmospheric Emissions Inventory for road transport emissions.
 - Public transport accessibility indicators from Verduzco Torres and McArthur.
+
+
+You can reproduce the derived Parquet and PMTiles files from the raw data sources using the Jupyter notebooks in [this H3 Aggregator Code](https://colab.research.google.com/drive/1BY59baJsvCSfNZukQ7RGdoQNYg5ZtGOP?usp=sharing).
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1BY59baJsvCSfNZukQ7RGdoQNYg5ZtGOP?usp=sharing) 
+
+
+
+The notebooks perform all necessary cleaning, transformation, and spatial joins to produce the analysis-ready assets.
+
+I’ve also made a viewer so that you can inspect the raw parquet data and derived layers in a spatial context: [https://danylaksono.is-a.dev/apps/h3_visualiser/](https://danylaksono.is-a.dev/apps/h3_visualiser/).
+
+
 
 ## Architecture
 
@@ -185,21 +193,6 @@ Typical analysis session:
 
 Saved scenarios persist in browser `localStorage`, including weights, method, active criteria, polarity settings, placements, and impact summaries.
 
-## Quality Checks
-
-```bash
-npm run lint
-npm run test:run
-npm run build
-```
-
-Use these commands before sharing results or producing figures for the paper. For a fully reproducible analytical snapshot, also record:
-
-- Git commit hash.
-- Node.js version.
-- Scenario JSON or exported scenario configuration.
-- DFES API query date if using live projections.
-- Any changes to `data_source/`.
 
 ## Limitations
 
@@ -210,4 +203,4 @@ Use these commands before sharing results or producing figures for the paper. Fo
 
 ## Citation 
 
-Laksono, D., Jianu, R., & Slingsby, A. (2026). Interactive Decision Support for Exploratory Planning of EV Charging Infrastructure. CGVC 2026.
+Laksono, D., Jianu, R., & Slingsby, A. (2026). [Interactive Decision Support for Exploratory Planning of EV Charging Infrastructure](https://diglib.eg.org/items/1d843fcf-2165-4f8e-9898-6de58b6f70dc). CGVC 2026.
